@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
 
     const install_bpf = b.addInstallFileWithDir(
         bpf_obj.getEmittedBin(),
-        .{ .custom = "../bpf-out" },
+        .{ .custom = "../src/bpf_progs/compiled" },
         "trace_bpf.o",
     );
 
