@@ -37,7 +37,13 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.linkSystemLibrary("bpf", .{});
     exe.root_module.linkSystemLibrary("elf", .{});
-    exe.root_module.link_libc = true;
 
     b.installArtifact(exe);
+
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
+    b.getInstallStep().dependOn(&install_bpf.step);
+
+    const run_step = b.step("run", "Run the application");
+    run_step.dependOn(&run_cmd.step);
 }
