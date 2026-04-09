@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.linkSystemLibrary("bpf", .{});
-    exe.root_module.linkSystemLibrary("elf", .{});
+    exe.root_module.linkSystemLibrary("c", .{});
 
     b.installArtifact(exe);
 
