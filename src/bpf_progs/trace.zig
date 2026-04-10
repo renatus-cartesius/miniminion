@@ -3,10 +3,24 @@ const BPF = std.os.linux.BPF;
 
 export const _license linksection("license") = "GPL".*;
 
-export fn trace_execve(ctx: *anyopaque) linksection("tracepoint/syscalls/sys_enter_execve") c_int {
+const BPF_MAP_TYPE_ARRAY = 2;
+
+export var pkt_counter linksection(".maps") = BPF.kern.MapDef{
+    .type = BPF_MAP_TYPE_ARRAY,
+    .key_size = @sizeOf(u32),
+    .value_size = @sizeOf(u64),
+    .max_entries = 1024,
+    .map_flags = 0,
+};
+
+export fn count_packets(ctx: *BPF.kern.XdpMd) linksection("xdp") c_int {
     _ = ctx;
-    const pid = BPF.kern.helpers.get_current_pid_tgid() >> 32;
-    const fmt = "execve called by PID: %d\n";
-    _ = BPF.kern.helpers.trace_printk(fmt, fmt.len, pid, 0, 0);
-    return 0;
+    const key: u32 = 0;
+
+    if (BPF.kern.helpers.map_lookup_elem(&pkt_counter, &key)) |ptr| {
+        const val: *u64 = @ptrCast(@alignCast(ptr));
+        _ = @atomicRmw(u64, val, 1, .Add, .seq_cst);
+    }
+
+    return 2;
 }

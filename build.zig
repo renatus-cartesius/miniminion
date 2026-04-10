@@ -9,11 +9,12 @@ pub fn build(b: *std.Build) void {
                 .cpu_arch = .bpfel,
                 .os_tag = .freestanding,
             }),
-            .optimize = .ReleaseSafe,
+            .unwind_tables = .none,
+            .optimize = .ReleaseFast,
         }),
     });
 
-    bpf_obj.root_module.strip = false;
+    bpf_obj.root_module.strip = true;
 
     const install_bpf = b.addInstallFileWithDir(
         bpf_obj.getEmittedBin(),
