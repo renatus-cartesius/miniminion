@@ -1,65 +1,73 @@
 const std = @import("std");
-const Io = std.Io;
-const assert = std.debug.assert;
-
 const c = @cImport({
-    @cInclude("bpf/libbpf.h");
+    @cInclude("libjsonnet.h");
 });
+const resource = @import("resource.zig");
 
 pub fn main() !void {
-    const bpf_obj_path = "src/bpf_progs/compiled/trace_bpf.o";
-    // const bpf_obj_path = "../ebpf-test/zig/hello.bpf.o";
+    // const allocator = std.heap.page_allocator;
 
-    std.debug.print("=== eBPF Loader ===\n", .{});
-    std.debug.print("Attempting to load: {s}\n", .{bpf_obj_path});
+    const vm = c.jsonnet_make() orelse return error.JsonnetVmMakeError;
+    defer c.jsonnet_destroy(vm);
 
-    const obj = c.bpf_object__open(bpf_obj_path) orelse {
-        std.debug.print("Failed to open BPF object\n", .{});
-        return error.BpfOpenFailed;
-    };
-    defer c.bpf_object__close(obj);
+    // miniminion example resources manifest
+    const input =
+        \\local Resource(type, name, args={}) = {
+        \\  type: type,
+        \\  name: name,
+        \\} + args;
+        \\{
+        \\  config_file: Resource("file", "myconfig", {"content": "foobar"}),
+        \\  some_pkg: Resource("package", "mypackage", {"name": "vim", version: "1.2.3"})
+        \\}
+    ;
+    const filename = "example.jsonnet";
 
-    if (c.bpf_object__load(obj) < 0) {
-        std.debug.print("Error loading BPF into kernel\n", .{});
-        std.debug.print("Try: ulimit -l unlimited\n", .{});
-        return error.BpfLoadFailed;
+    var error_found: i32 = 0;
+    // const result_ptr = c.jsonnet_evaluate_snippet_multt(vm, filename, input, &error_found);
+    const result_ptr = c.jsonnet_evaluate_snippet(vm, filename, input, &error_found);
+
+    if (error_found != 0) {
+        std.debug.print("Jsonnet Error: {}\n", .{error_found});
+        return error.JsonnetEvalError;
     }
 
-    std.debug.print("BPF object loaded successfully!\n", .{});
+    if (result_ptr) |ptr| {
+        defer _ = c.jsonnet_realloc(vm, ptr, 0);
+        const json_output = std.mem.span(ptr);
+        std.debug.print("Generated json:\n{s}\n", .{json_output});
+        // const resources = try parseResourses(allocator, json_output);
 
-    // const prog = c.bpf_object__find_program_by_name(obj, "hello_world") orelse {
-    //     std.debug.print("Failed to find program 'trace_execve'\n", .{});
-    //     return error.ProgramNotFound;
-    // };
-    //
-    // std.debug.print("Program 'trace_execve' found, attaching...\n", .{});
-    //
-    // const link = c.bpf_program__attach(prog) orelse {
-    //     std.debug.print("Error attaching program\n", .{});
-    //     return error.BpfAttachFailed;
-    // };
-    // defer _ = c.bpf_link__destroy(link);
-    //
-    // std.debug.print("eBPF program 'trace_execve' attached successfully!\n", .{});
-    // std.debug.print("Listening to /sys/kernel/tracing/trace_pipe...\n", .{});
-    // std.debug.print("Trigger execve by running: bash -c 'echo test' &\n", .{});
-    // std.debug.print("Press Ctrl+C to stop\n\n", .{});
+        // std.debug.print("RES 1: {}", .{resources[0]});
+    }
+}
 
-    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
-    defer assert(debug_allocator.deinit() == .ok);
-    const gpa = debug_allocator.allocator();
+pub fn parseResourses(allocator: std.mem.Allocator, json_input: []const u8) !std.StringArrayHashMap(Resource) {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_input, .{});
+    defer parsed.deinit();
 
-    var threaded: std.Io.Threaded = .init(gpa, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
+    var resources = std.StringArrayHashMap(Resource).init(allocator);
+    errdefer {
+        resources.deinit();
+    }
 
-    // Main loop - print messages periodically
-    var counter: u32 = 0;
-    while (true) {
-        io.sleep(.fromSeconds(3), .awake) catch {};
-        counter += 1;
-        if (counter % 2 == 0) {
-            std.debug.print("Still running... ({}s)\n", .{counter * 3});
+    const root_obj = parsed.Value.object;
+
+    var iter = root_obj.iterator();
+    while (iter.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.object;
+
+        const res_type = val.get("type").?.string;
+
+        if (std.mem.eql(u8, res_type, "file")) {
+            const content = try allocator.dupe(u8, val.get("content").?.string);
+            try resources.put(try allocator.dupe(u8, key), .{ .file = .{ .content = content } });
+        } else if (std.mem.eql(u8, res_type, "package")) {
+            const name = try .allocator.dupe(u8, val.get("name").?.string);
+            try resources.put(try allocator.dupe(u8, key), .{ .package = .{ .name = name } });
         }
     }
+
+    return resources;
 }

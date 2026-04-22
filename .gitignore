@@ -2,3 +2,5 @@
 zig-out
 bpf-out
 *.o
+vmlinux.h
+.vagrant
