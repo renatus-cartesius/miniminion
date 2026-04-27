@@ -25,12 +25,11 @@ pub const Resource = struct {
     data: ResourceData,
 };
 
-fn parseReources(allocator: std.mem.Allocator, json: []const u8) ![]Resource {
+fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resource {
+    const allocator = arena.allocator();
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
-    // defer parsed.deinit();
 
     var resources = try std.ArrayList(Resource).initCapacity(allocator, 0);
-    // defer resources.deinit(allocator);
 
     var iter = parsed.value.object.iterator();
     while (iter.next()) |entry| {
@@ -43,7 +42,6 @@ fn parseReources(allocator: std.mem.Allocator, json: []const u8) ![]Resource {
         inline for (std.meta.fields(ResourceData)) |field| {
             if (std.mem.eql(u8, type_name, field.name)) {
                 const parsed_field = try std.json.parseFromValue(field.type, allocator, resource_data, .{ .ignore_unknown_fields = true });
-                // defer parsed_field.deinit();
 
                 try resources.append(allocator, .{ .name = resource_name, .data = @unionInit(ResourceData, field.name, parsed_field.value) });
                 break;
@@ -57,7 +55,6 @@ fn parseReources(allocator: std.mem.Allocator, json: []const u8) ![]Resource {
 test "State map parsing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const allocator = arena.allocator();
 
     const json =
         \\{
@@ -79,10 +76,10 @@ test "State map parsing" {
         \\}
     ;
 
-    const resources = try parseReources(allocator, json);
+    const resources = try parseReources(&arena, json);
 
     for (resources) |r| {
-        std.debug.print("\nResource {s}:\n\t", .{@tagName(r.data)});
+        std.debug.print("Resource {s}:\n\t", .{@tagName(r.data)});
         switch (r.data) {
             .file => |f| std.debug.print("filepath: {s}, content: {s}\n", .{ f.path, f.content }),
             .package => |p| std.debug.print("name: {s}, version: {s}\n", .{ p.name, p.version orelse "unset" }),
