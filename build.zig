@@ -15,6 +15,10 @@ pub fn build(b: *std.Build) void {
     // exe.linkage = .static;
 
     b.installArtifact(exe);
+
+    const run_cmd = b.addRunArtifact(exe);
+    const run_step = b.step("run", "Run miniminion binary");
+    run_step.dependOn(&run_cmd.step);
 }
 
 // pub fn build(b: *std.Build) void {
