@@ -1,7 +1,7 @@
 const std = @import("std");
 const dag = @import("dag.zig");
 
-const ResourceErrors = error{ MissingType, NotFoundResource };
+pub const ResourceErrors = error{ MissingType, NotFoundResource };
 
 pub const File = struct {
     path: []const u8,

@@ -1,12 +1,32 @@
-local Resource(type, name, args={}, deps=[]) = {
+local Resource(type, args={}, deps=[]) = {
   deps: deps,
   type: type,
-  name: name,
 } + args;
 
+// Simple miniminion manifest for docker setup
 
 {
-  config_file: Resource('file', 'myconfig', { path: '/etc/config', content: 'foobar' }),
-  some_pkg: Resource('package', 'mypackage', { name: 'vim', version: '1.2.3' }, deps=['config_file']),
-  another_pkg: Resource('package', 'mypackage', { name: 'vim', version: '1.2.3' }),
+  common_deps: Resource('package', { name: 'apt-transport-https', version: 'latest' }),
+
+  docker_pkg: Resource(
+    'package',
+    { name: 'docker-ce', version: '24.0.0' },
+    deps=['common_deps']
+  ),
+
+  docker_config: Resource(
+    'file',
+    {
+      path: '/etc/docker/daemon.json',
+      content: '{"log-driver": "json-file", "log-opts": {"max-size": "10m"}}',
+    },
+    deps=['docker_pkg']
+  ),
+
+  docker_compose: Resource(
+    'package',
+    { name: 'docker-compose-plugin' },
+    deps=['docker_pkg']
+  ),
+
 }
