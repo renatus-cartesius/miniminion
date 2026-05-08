@@ -35,7 +35,7 @@ pub fn main(init: std.process.Init) !void {
             return error.JsonnetEvalError;
         }
 
-        print("Generated json:\n{s}\n", .{json_output});
+        // print("Generated json:\n{s}\n", .{json_output});
         // const resources = try parseResourses(allocator, json_output);
 
         // std.debug.print("RES 1: {}", .{resources[0]});
@@ -45,20 +45,20 @@ pub fn main(init: std.process.Init) !void {
         var rmap = std.StringHashMap(usize).init(allocator);
         defer rmap.deinit();
 
-        print("Parsed state:\n", .{});
+        // print("Parsed state:\n", .{});
 
         for (resources) |r| {
             try rmap.put(r.name, try rdag.addNode(r));
 
-            print("Resource {s}:\n", .{r.name});
-            switch (r.data) {
-                .file => |f| print("\tfilepath: {s}, content: {s}\n", .{ f.path, f.content }),
-                .package => |p| print("\tname: {s}, version: {s}\n", .{ p.name, p.version orelse "unset" }),
-            }
-
-            for (r.deps) |d| {
-                print("\t\tDependency: {s}\n", .{d});
-            }
+            // print("Resource {s}:\n", .{r.name});
+            // switch (r.data) {
+            //     .file => |f| print("\tfilepath: {s}, content: {s}\n", .{ f.path, f.content }),
+            //     .package => |p| print("\tname: {s}, version: {s}\n", .{ p.name, p.version orelse "unset" }),
+            // }
+            //
+            // for (r.deps) |d| {
+            //     print("\t\tDependency: {s}\n", .{d});
+            // }
         }
 
         for (resources) |r| {
@@ -70,11 +70,11 @@ pub fn main(init: std.process.Init) !void {
         const order = try rdag.topologicalSort(allocator);
         defer allocator.free(order);
 
-        print("\nState execution order: ", .{});
-        for (order) |i| {
-            std.debug.print("{s} -> ", .{rdag.nodes.items[i].value.name});
-        }
-        std.debug.print("End.\n", .{});
+        // print("\nState execution order: ", .{});
+        // for (order) |i| {
+        //     std.debug.print("{s} -> ", .{rdag.nodes.items[i].value.name});
+        // }
+        // std.debug.print("End.\n", .{});
 
         for (order) |i| {
             _ = try rdag.nodes.items[i].value.data.apply(io, allocator);
