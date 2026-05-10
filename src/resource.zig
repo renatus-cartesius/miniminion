@@ -1,5 +1,6 @@
 const std = @import("std");
 const dag = @import("dag.zig");
+const package = @import("modules/package.zig");
 
 pub const ResourceErrors = error{ MissingType, NotFoundResource };
 
@@ -7,24 +8,31 @@ pub const File = struct {
     path: []const u8,
     content: []const u8 = "",
     mode: u32 = 0o655,
+    io: std.Io,
+    allocator: std.mem.Allocator,
+
+    pub fn init(self: File, io: std.Io, allocator: std.mem.Allocator) !void {
+        self.io = io;
+        self.allocator = allocator;
+    }
 
     pub fn help(self: File) void {
         _ = self;
         std.debug.print("file help: resource for managing files\n", .{});
     }
 
-    pub fn apply(self: File, io: std.Io, allocator: std.mem.Allocator) !bool {
+    pub fn apply(self: File) !bool {
         // Try to open existing file, create if it doesn't exist
-        const open_result = std.Io.Dir.openFile(.cwd(), io, self.path, .{ .mode = .read_write });
+        const open_result = std.Io.Dir.openFile(.cwd(), self.io, self.path, .{ .mode = .read_write });
         if (open_result) |file| {
             // File exists, check content and permissions
-            const buf = try allocator.alloc(u8, 1024 * 1024);
-            defer allocator.free(buf);
-            var reader = file.reader(io, buf);
-            const content = try reader.interface.readAlloc(allocator, try file.length(io));
+            const buf = try self.allocator.alloc(u8, 1024 * 1024);
+            defer self.allocator.free(buf);
+            var reader = file.reader(self.io, buf);
+            const content = try reader.interface.readAlloc(self.allocator, try file.length(self.io));
 
             // Check and set file mode/permissions if needed
-            const file_stat = try std.Io.Dir.statFile(.cwd(), io, self.path, .{});
+            const file_stat = try std.Io.Dir.statFile(.cwd(), self.io, self.path, .{});
             const expected_perms = std.Io.File.Permissions.fromMode(self.mode);
             var permissions_updated = false;
 
@@ -35,12 +43,12 @@ pub const File = struct {
             const expected_mode_bits = @intFromEnum(expected_perms) & 0o777;
 
             if (current_mode_bits != expected_mode_bits) {
-                try std.Io.Dir.setFilePermissions(.cwd(), io, self.path, expected_perms, .{});
+                try std.Io.Dir.setFilePermissions(.cwd(), self.io, self.path, expected_perms, .{});
                 permissions_updated = true;
             }
 
             if (std.mem.eql(u8, content, self.content)) {
-                file.close(io);
+                file.close(self.io);
                 if (permissions_updated) {
                     std.debug.print("file {s} permissions updated\n", .{self.path});
                 } else {
@@ -50,16 +58,16 @@ pub const File = struct {
             }
 
             // Content differs, update file by closing and reopening with truncate
-            file.close(io);
+            file.close(self.io);
 
             const options: std.Io.Dir.CreateFileOptions = .{ .read = true, .truncate = true, .permissions = std.Io.File.Permissions.fromMode(self.mode) };
-            var new_file = try std.Io.Dir.createFile(.cwd(), io, self.path, options);
+            var new_file = try std.Io.Dir.createFile(.cwd(), self.io, self.path, options);
 
-            var writer = new_file.writer(io, buf);
+            var writer = new_file.writer(self.io, buf);
             const wrote = try writer.interface.write(self.content);
             _ = try writer.flush();
 
-            new_file.close(io);
+            new_file.close(self.io);
 
             std.debug.print("file {s} CHANGED, wrote {d} bytes\n", .{ self.path, wrote });
             return true;
@@ -68,16 +76,16 @@ pub const File = struct {
                 // File doesn't exist, create it with specified mode
                 const perms = std.Io.File.Permissions.fromMode(self.mode);
                 const options: std.Io.Dir.CreateFileOptions = .{ .read = true, .truncate = true, .permissions = perms };
-                var new_file = try std.Io.Dir.createFile(.cwd(), io, self.path, options);
+                var new_file = try std.Io.Dir.createFile(.cwd(), self.io, self.path, options);
 
                 // Write content to new file
-                const buf = try allocator.alloc(u8, 1024 * 1024);
-                defer allocator.free(buf);
-                var writer = new_file.writer(io, buf);
+                const buf = try self.allocator.alloc(u8, 1024 * 1024);
+                defer self.allocator.free(buf);
+                var writer = new_file.writer(self.io, buf);
                 const wrote = try writer.interface.write(self.content);
                 _ = try writer.flush();
 
-                new_file.close(io);
+                new_file.close(self.io);
 
                 std.debug.print("file {s} CREATED, wrote {d} bytes\n", .{ self.path, wrote });
                 return true;
@@ -91,76 +99,23 @@ pub const File = struct {
 pub const Package = struct {
     name: []const u8,
     version: ?[]const u8 = null,
+    mgr: package.Manager,
+    io: std.Io,
+    allocator: std.mem.Allocator,
+
+    pub fn init(self: Package, io: std.Io, allocator: std.mem.Allocator) !void {
+        self.allocator = allocator;
+        self.io = io;
+        self.mgr = package.Manager.init(allocator, io);
+    }
 
     pub fn help(self: Package) void {
         _ = self;
         std.debug.print("package help: resource for managing packages\n", .{});
     }
 
-    pub fn apply(self: Package, io: std.Io, allocator: std.mem.Allocator) !bool {
-        std.debug.print("package {s}", .{self.name});
-        if (self.version) |v| {
-            std.debug.print("@{s}", .{v});
-        }
-        std.debug.print(": ", .{});
-
-        // Check if package is already installed using direct command execution
-        const query_argv = [_][]const u8{ "dpkg-query", "-W", "-f=${Status}", self.name };
-
-        const query_result = std.process.run(allocator, io, .{
-            .argv = &query_argv,
-            .stderr_limit = .unlimited,
-            .stdout_limit = .unlimited,
-        }) catch {
-            // If dpkg-query fails, it might mean the package is not installed or dpkg-query is not available
-            std.debug.print("checking system... ", .{});
-
-            // Check if we're on a Debian/Ubuntu system
-            const which_result = std.process.run(allocator, io, .{
-                .argv = &[_][]const u8{ "which", "dpkg-query" },
-                .stderr_limit = .unlimited,
-                .stdout_limit = .unlimited,
-            }) catch {
-                std.debug.print("SKIP (no package manager)\n", .{});
-                return false;
-            };
-            defer {
-                allocator.free(which_result.stderr);
-                allocator.free(which_result.stdout);
-            }
-
-            if (which_result.term != .exited or which_result.term.exited != 0) {
-                std.debug.print("SKIP (no package manager)\n", .{});
-                return false;
-            }
-
-            std.debug.print("INSTALL (package manager available)\n", .{});
-            // In a real implementation, we would install the package here
-            // For now, we'll just indicate that installation would happen
-            return true;
-        };
-        defer {
-            allocator.free(query_result.stderr);
-            allocator.free(query_result.stdout);
-        }
-
-        // Check if package is installed
-        if (query_result.term == .exited and query_result.term.exited == 0) {
-            // Check the output to see if package is installed
-            if (std.mem.indexOf(u8, query_result.stdout, "install ok installed") != null) {
-                std.debug.print("OK (already installed)\n", .{});
-                return false; // No changes needed
-            } else {
-                std.debug.print("INSTALL (not installed)\n", .{});
-                // In a real implementation, we would install the package here
-                return true; // Would make changes
-            }
-        } else {
-            std.debug.print("INSTALL (not found)\n", .{});
-            // Package not found, would install it
-            // In a real implementation, we would install the package here
-            return true; // Would make changes
-        }
+    pub fn apply(self: Package, io: std.Io) !bool {
+        _ = self.mgr.install(io, self.name);
     }
 };
 
@@ -174,9 +129,15 @@ pub const ResourceData = union(enum) {
         }
     }
 
-    pub fn apply(self: ResourceData, io: std.Io, allocator: std.mem.Allocator) !bool {
+    pub fn apply(self: ResourceData) !bool {
         switch (self) {
-            inline else => |case| return try case.apply(io, allocator),
+            inline else => |case| return try case.apply(),
+        }
+    }
+
+    pub fn init(self: ResourceData, io: std.Io, allocator: std.mem.Allocator) !void {
+        switch (self) {
+            inline else => |case| return try case.init(io, allocator),
         }
     }
 };
