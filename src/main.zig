@@ -77,8 +77,8 @@ pub fn main(init: std.process.Init) !void {
         // std.debug.print("End.\n", .{});
 
         for (order) |i| {
-            try rdag.nodes.items[i].value.data.init(io, allocator);
-            // _ = try rdag.nodes.items[i].value.data.apply();
+            // try rdag.nodes.items[i].value.data.init(io, allocator);
+            _ = try rdag.nodes.items[i].value.data.apply();
         }
     }
 }

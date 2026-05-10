@@ -24,29 +24,27 @@ const apt = struct {
     }
 };
 
-pub const Manager = union(enum) {
-    pacman: pacman,
-    apt: apt,
+pub const Manager = struct {
+    inner: Inner,
     allocator: std.mem.Allocator,
+
+    const Inner = union(enum) {
+        pacman: pacman,
+        apt: apt,
+    };
 
     pub fn init(allocator: std.mem.Allocator) Manager {
         const osfamily = "debian";
 
         if (std.mem.eql(u8, osfamily, "debian")) {
-            return .{
-                .apt = .apt{},
-                .allocator = allocator,
-            };
+            return Manager{ .inner = Inner{ .apt = apt{} }, .allocator = allocator };
         } else {
-            return .{
-                .pacman = .pacman{},
-                .allocator = allocator,
-            };
+            return Manager{ .inner = Inner{ .pacman = pacman{} }, .allocator = allocator };
         }
     }
 
     pub fn install(self: Manager, io: std.Io, name: []const u8) !std.process.RunResult {
-        switch (self) {
+        switch (self.inner) {
             inline else => |case| return try case.install(self.allocator, io, name),
         }
     }
