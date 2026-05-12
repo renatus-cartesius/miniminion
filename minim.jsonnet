@@ -42,7 +42,8 @@ local fileMode(mode) =
   ),
   vim: Resource(
     'package',
-    { name: 'vim-common', version: '2:9.1.0016-1ubuntu7' },
+    { name: 'vim-common', version: '2:9.1.0016-1ubuntu7.13' },
+    // { name: 'vim-common' },
     deps=['neovim']
   ),
 }

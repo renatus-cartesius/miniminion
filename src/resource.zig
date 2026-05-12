@@ -113,33 +113,23 @@ pub const Package = struct {
     }
 
     pub fn apply(self: *Package) !bool {
-        if (self.version == null) {
-            std.debug.print("package {s}: version undefined\n", .{self.name});
-            return false;
-        }
+        // self.mgr.install(name, ?version) => installs a package of the specified version or simply installs it without specifying a version(depending on the specific package manager)
+        // self.mgr.checkVersion(name, ?version) => checks that the package of the required version is installed of that it is installed at all
 
-        // check if package already present with correct version
-        if (self.mgr.?.checkVersion(self.io.?, self.name, self.version.?)) |correct| {
-            if (correct) {
-                // package in correct version
-                std.debug.print("package {s}={s} : OK\n", .{ self.name, self.version.? });
-                return false;
-            } else {
-                // reinstalling package with correct version
-                try self.mgr.?.install(self.io.?, self.name);
-                std.debug.print("package {s}: CHANGED reinstalled\n", .{self.name});
-                return true;
-            }
-        } else |err| {
-            if (err == package.PackageError.NotInstalled) {
-                // installing the package
-                try self.mgr.?.install(self.io.?, self.name);
-                std.debug.print("package {s}={s} : CHANGED installed\n", .{ self.name, self.version.? });
-                return true;
-            } else {
-                // something undefined happen
-                return err;
-            }
+        // check if package already installed
+        if (try self.mgr.?.checkVersion(self.io.?, self.name, self.version)) {
+            // package installed with correct version if specified
+            std.debug.print("package {s}={s} : OK\n", .{ self.name, self.version orelse "latest" });
+            return false;
+        } else {
+            // reinstalling package with correct version
+            try self.mgr.?.install(
+                self.io.?,
+                self.name,
+                self.version,
+            );
+            std.debug.print("package {s}: CHANGED installed\n", .{self.name});
+            return true;
         }
     }
 };
@@ -262,7 +252,7 @@ test "Resource: simple state execution" {
         \\    "content": "alias z=zig",
         \\    "deps": ["hosts-config", "compiler"]
         \\  },
-        \\  "hosts-config": {
+        \\  "hosts-config": {resou
         \\    "type": "file",
         \\    "path": "/etc/hosts",
         \\    "content": "asdfsdf",
