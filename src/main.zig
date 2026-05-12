@@ -35,11 +35,11 @@ pub fn main(init: std.process.Init) !void {
             return error.JsonnetEvalError;
         }
 
-        // print("Generated json:\n{s}\n", .{json_output});
-        // const resources = try parseResourses(allocator, json_output);
+        std.debug.print("Generated JSON:\n{s}\n", .{json_output});
 
-        // std.debug.print("RES 1: {}", .{resources[0]});
+        // print("Generated json:\n{s}\n", .{json_output});
         const resources = try resource.parseReources(init.arena, json_output);
+        std.debug.print("JSON parsed successfully, resources count: {d}\n", .{resources.len});
         var rdag = try dag.DAG(resource.Resource).init(allocator);
         defer rdag.deinit();
         var rmap = std.StringHashMap(usize).init(allocator);
@@ -77,7 +77,7 @@ pub fn main(init: std.process.Init) !void {
         // std.debug.print("End.\n", .{});
 
         for (order) |i| {
-            // try rdag.nodes.items[i].value.data.init(io, allocator);
+            try rdag.nodes.items[i].value.data.init(init.io, allocator);
             _ = try rdag.nodes.items[i].value.data.apply();
         }
     }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const dag = @import("dag.zig");
 const package = @import("modules/package.zig");
+const cmd = @import("modules/utils/cmd.zig");
 
 pub const ResourceErrors = error{ MissingType, NotFoundResource, IoNotInitialized, AllocatorNotInitialized };
 
@@ -101,7 +102,7 @@ pub const File = struct {
 pub const Package = struct {
     name: []const u8,
     version: ?[]const u8 = null,
-    mgr: package.Manager,
+    mgr: ?package.Manager = null,
     io: ?std.Io = null,
     allocator: ?std.mem.Allocator = null,
 
@@ -111,14 +112,35 @@ pub const Package = struct {
         self.mgr = package.Manager.init(allocator);
     }
 
-    pub fn help(self: Package) void {
-        _ = self;
-        std.debug.print("package help: resource for managing packages\n", .{});
-    }
-
     pub fn apply(self: *Package) !bool {
-        _ = self.mgr.install(self.io.?, self.name);
-        return true;
+        if (self.version == null) {
+            std.debug.print("package {s}: version undefined\n", .{self.name});
+            return false;
+        }
+
+        // check if package already present with correct version
+        if (self.mgr.?.checkVersion(self.io.?, self.name, self.version.?)) |correct| {
+            if (correct) {
+                // package in correct version
+                std.debug.print("package {s}={s} : OK\n", .{ self.name, self.version.? });
+                return false;
+            } else {
+                // reinstalling package with correct version
+                try self.mgr.?.install(self.io.?, self.name);
+                std.debug.print("package {s}: CHANGED reinstalled\n", .{self.name});
+                return true;
+            }
+        } else |err| {
+            if (err == package.PackageError.NotInstalled) {
+                // installing the package
+                try self.mgr.?.install(self.io.?, self.name);
+                std.debug.print("package {s}={s} : CHANGED installed\n", .{ self.name, self.version.? });
+                return true;
+            } else {
+                // something undefined happen
+                return err;
+            }
+        }
     }
 };
 
@@ -134,7 +156,7 @@ pub const ResourceData = union(enum) {
 
     pub fn apply(self: *ResourceData) !bool {
         switch (self.*) {
-            inline else => |case| return try case.apply(),
+            inline else => |*case| return try case.apply(),
         }
     }
 
@@ -159,61 +181,71 @@ pub const State = struct {
 pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resource {
     const allocator = arena.allocator();
 
-    // Try a simpler approach - parse manually to avoid comptime issues
+    // Use std.json with more careful error handling
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
+    defer parsed.deinit();
+
     var resources = try std.ArrayList(Resource).initCapacity(allocator, 0);
     defer resources.deinit(allocator);
 
-    // Simple JSON parsing for our specific use case
-    // Expected format: { "resource_name": { "type": "file", "path": "...", "content": "...", "deps": [...] } }
+    var iter = parsed.value.object.iterator();
+    while (iter.next()) |entry| {
+        const resource_name = entry.key_ptr.*;
+        const resource_data = entry.value_ptr.*;
 
-    var i: usize = 0;
-    while (i < json.len) {
-        // Skip whitespace
-        while (i < json.len and std.ascii.isWhitespace(json[i])) i += 1;
-        if (i >= json.len) break;
+        // Simple parsing without complex comptime operations
+        const type_field = resource_data.object.get("type") orelse return error.MissingType;
+        const type_name = type_field.string;
 
-        if (json[i] != '{') return error.InvalidJson;
+        // Parse deps
+        var deps_array = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        defer deps_array.deinit(allocator);
 
-        i += 1; // skip '{'
+        if (resource_data.object.get("deps")) |deps_value| {
+            if (deps_value == .array) {
+                for (deps_value.array.items) |dep| {
+                    if (dep == .string) {
+                        try deps_array.append(allocator, dep.string);
+                    }
+                }
+            }
+        }
+        const deps = try deps_array.toOwnedSlice(allocator);
 
-        // Find resource name
-        while (i < json.len and std.ascii.isWhitespace(json[i])) i += 1;
-        if (json[i] != '"') return error.InvalidJson;
-        i += 1; // skip '"'
+        // Parse file or package based on type
+        if (std.mem.eql(u8, type_name, "file")) {
+            const path_field = resource_data.object.get("path") orelse continue;
+            const content_field = resource_data.object.get("content") orelse continue;
+            const mode_field = resource_data.object.get("mode") orelse std.json.Value{ .integer = 0o755 };
 
-        const resource_name_start = i;
-        while (i < json.len and json[i] != '"') i += 1;
-        if (i >= json.len) return error.InvalidJson;
-        _ = resource_name_start; // resource name temporarily unused
-        i += 1; // skip '"'
+            const file_resource = Resource{
+                .name = resource_name,
+                .data = ResourceData{ .file = File{
+                    .path = path_field.string,
+                    .content = content_field.string,
+                    .mode = @intCast(mode_field.integer),
+                } },
+                .deps = deps,
+            };
+            try resources.append(allocator, file_resource);
+        } else if (std.mem.eql(u8, type_name, "package")) {
+            const name_field = resource_data.object.get("name") orelse continue;
+            const version_field = resource_data.object.get("version");
 
-        // Skip to object content
-        while (i < json.len and json[i] != '{') i += 1;
-        if (i >= json.len) return error.InvalidJson;
-
-        // Parse the resource object
-        const resource_obj = try parseResourceObject(arena, json, &i);
-        try resources.append(allocator, resource_obj);
+            const package_resource = Resource{
+                .name = resource_name,
+                .data = ResourceData{ .package = Package{
+                    .name = name_field.string,
+                    .version = if (version_field) |v| v.string else null,
+                    .mgr = package.Manager.init(allocator),
+                } },
+                .deps = deps,
+            };
+            try resources.append(allocator, package_resource);
+        }
     }
 
     return resources.toOwnedSlice(allocator);
-}
-
-fn parseResourceObject(arena: *std.heap.ArenaAllocator, json: []const u8, pos: *usize) !Resource {
-    _ = arena;
-    _ = json;
-    _ = pos;
-
-    // This is a simplified version - for now, return a basic file resource
-    // In a real implementation, you'd parse the JSON properly here
-    return Resource{
-        .name = "test",
-        .data = ResourceData{ .file = File{
-            .path = "/tmp/test",
-            .content = "test content",
-        } },
-        .deps = &.{},
-    };
 }
 
 test "Resource: simple state execution" {

@@ -1,0 +1,21 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Build the miniminion project
+    cmds:
+      - zig build
+    sources:
+      - src/**/*.zig
+      - build.zig
+    generates:
+      - zig-out/bin/miniminion
+
+  deploy:
+    desc: Deploy miniminion binary and config to Vagrant VM
+    cmds:
+      - task: build
+      - cd testing && vagrant upload ../zig-out/bin/miniminion /home/vagrant/
+      - cd testing && vagrant upload ../minim.jsonnet /home/vagrant/
+    deps:
+      - build
