@@ -4,3 +4,4 @@ bpf-out
 *.o
 vmlinux.h
 .vagrant
+.task

@@ -1,15 +1,24 @@
 version: '3'
 
 tasks:
-  build:
-    desc: Build the miniminion project
+  build-builder:
+    desc: Build the Docker image
+    sources:
+      - Dockerfile
     cmds:
-      - zig build
+      - docker build --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t miniminion-builder .
+
+  build:
+    desc: Build the miniminion project inside Zig container
+    cmds:
+      - docker run --rm -v .:/workspace -w /workspace miniminion-builder zig build
     sources:
       - src/**/*.zig
       - build.zig
     generates:
       - zig-out/bin/miniminion
+    deps:
+      - build-builder
 
   deploy:
     desc: Deploy miniminion binary and config to Vagrant VM
