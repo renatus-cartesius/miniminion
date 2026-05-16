@@ -13,7 +13,8 @@ local fileMode(mode) =
 
   docker_pkg: Resource(
     'package',
-    { name: 'docker-io', version: '29.1.3-0ubuntu3~24.04.1' },
+    // { name: 'docker.io', version: '29.1.3-0ubuntu3~24.04.1' },
+    { name: 'docker.io' },
     deps=['common_deps']
   ),
 

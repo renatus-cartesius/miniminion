@@ -10,7 +10,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     }) });
 
-    exe.root_module.linkSystemLibrary("jsonnet", .{});
+    // jsonnet linkage
+    exe.root_module.addIncludePath(.{ .cwd_relative = "/opt/jsonnet-dist/include" });
+    exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libjsonnet.a" });
+    exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libstdc++.a" });
+    exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libgcc_eh.a" });
+
     exe.root_module.linkSystemLibrary("c", .{});
     // exe.linkage = .static;
 
