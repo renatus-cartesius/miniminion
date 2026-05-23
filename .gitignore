@@ -5,3 +5,4 @@ bpf-out
 vmlinux.h
 .vagrant
 .task
+*.log

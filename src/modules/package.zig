@@ -60,6 +60,10 @@ const apt = struct {
             }
 
             if (check_res.term == .exited and check_res.term.exited != 0) {
+                if (std.mem.indexOf(u8, check_res.stderr, "no packages found matching") != null) {
+                    return false;
+                }
+
                 return PackageError.FailedCheckInstalled;
             }
 
