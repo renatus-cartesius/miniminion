@@ -16,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
 
     const file_path = "/minim.jsonnet";
 
-    var file = try std.Io.Dir.openFile(std.Io.Dir.cwd(), io, "./minim.jsonnet", .{});
+    var file = try std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_path, .{});
     defer file.close(io);
     const buf = try allocator.alloc(u8, 1024 * 1024);
     var reader = file.reader(io, buf);

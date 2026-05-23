@@ -9,6 +9,7 @@ local fileMode(mode) =
 
 // Simple miniminion manifest for docker setup
 {
+  // cache_update: Resource('')
   common_deps: Resource('package', { name: 'apt-transport-https' }),
 
   docker_pkg: Resource(
