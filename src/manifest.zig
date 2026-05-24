@@ -17,20 +17,9 @@ pub const Manifest = struct {
         const vm = c.jsonnet_make() orelse return error.JsonnetVmMakeError;
         defer c.jsonnet_destroy(vm);
 
-        var ctx = CallbackCtx{
-            .vm = vm,
-            .io = io,
-            .allocator = allocator,
-        };
-
+        var ctx = CallbackCtx{ .vm = vm, .io = io, .allocator = allocator };
         const params = [_:null]?[*:0]const u8{ "cmd", null };
-        c.jsonnet_native_callback(
-            vm,
-            "shellExec",
-            shellExec,
-            &ctx,
-            @ptrCast(&params),
-        );
+        c.jsonnet_native_callback(vm, "shellExec", shellExec, &ctx, @ptrCast(&params));
 
         var file = try std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_path, .{});
         defer file.close(io);
@@ -38,18 +27,22 @@ pub const Manifest = struct {
         defer allocator.free(buf);
         var reader = file.reader(io, buf);
         const content = try reader.interface.readAlloc(allocator, try file.length(io));
+        defer allocator.free(content);
 
         var error_found: i32 = 0;
         const result_ptr = c.jsonnet_evaluate_snippet(vm, &file_path[0], &content[0], &error_found);
 
+        if (error_found != 0) {
+            if (result_ptr) |ptr| {
+                const err_msg = std.mem.span(ptr);
+                std.debug.print("Jsonnet eval error:\n{s}\n", .{err_msg});
+            }
+            return error.JsonnetEvalError;
+        }
+
         if (result_ptr) |ptr| {
             defer _ = c.jsonnet_realloc(vm, ptr, 0);
-            const json_output = std.mem.span(ptr);
-
-            if (error_found != 0) {
-                return error.JsonnetEvalError;
-            }
-
+            const json_output = try allocator.dupe(u8, std.mem.span(ptr));
             return Manifest{ .json_output = json_output };
         }
 
@@ -62,8 +55,6 @@ pub const Manifest = struct {
         success: [*c]c_int,
     ) callconv(.c) ?*c.JsonnetJsonValue {
         const cbctx: *CallbackCtx = @ptrCast(@alignCast(ctx));
-
-        // Using self.io and self.allocator here
 
         const shell_cmd_json = argv[0] orelse {
             success.* = 0;
@@ -88,10 +79,11 @@ pub const Manifest = struct {
         if (res.term == .exited and res.term.exited != 0) {
             success.* = 0;
 
-            const msg = std.fmt.allocPrint(
+            const msg = std.fmt.allocPrintSentinel(
                 cbctx.allocator,
                 "native shell exec failed with error: \n{s}",
                 .{res.stderr},
+                0,
             ) catch {
                 return makeString(cbctx.vm, "failed to format shell exec error message");
             };
@@ -101,12 +93,18 @@ pub const Manifest = struct {
         }
 
         const trimmed = std.mem.trimEnd(u8, res.stdout, "\n");
+        const trimmed_z = cbctx.allocator.dupeSentinel(u8, trimmed, 0) catch {
+            success.* = 0;
+            return makeString(cbctx.vm, "alloc failed");
+        };
+        defer cbctx.allocator.free(trimmed_z);
+
         success.* = 1;
-        return makeString(cbctx.vm, trimmed);
+        return makeString(cbctx.vm, trimmed_z);
     }
 };
 
-fn makeString(vm: *c.JsonnetVm, s: []const u8) *c.JsonnetJsonValue {
-    const res = c.jsonnet_json_make_string(vm, s.ptr).?;
+fn makeString(vm: *c.JsonnetVm, s: [*:0]const u8) *c.JsonnetJsonValue {
+    const res = c.jsonnet_json_make_string(vm, s).?;
     return res;
 }

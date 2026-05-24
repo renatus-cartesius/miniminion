@@ -7,9 +7,18 @@ local fileMode(mode) =
   local digits = std.stringChars(mode);
   std.foldl(function(acc, digit) acc * 8 + std.parseInt(digit), digits, 0);
 
+local shellExec = std.native('shellExec');
+
 // Simple miniminion manifest for docker setup
 {
-  // cache_update: Resource('')
+  kernel_info: Resource(
+    'file',
+    {
+      path: '/home/vagrant/kernel_info',
+      content: shellExec('uname -a'),
+    },
+  ),
+
   common_deps: Resource('package', { name: 'apt-transport-https' }),
 
   docker_pkg: Resource(
