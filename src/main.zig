@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
     const manifest_data = try manifest.Manifest.load(allocator, io, file_path);
     defer allocator.free(manifest_data.json_output);
 
-    std.debug.print("Generated JSON:\n{s}\n", .{manifest_data.json_output});
+    // std.debug.print("Generated JSON:\n{s}\n", .{manifest_data.json_output});
 
     const resources = try resource.parseReources(init.arena, manifest_data.json_output);
     std.debug.print("JSON parsed successfully, resources count: {d}\n", .{resources.len});

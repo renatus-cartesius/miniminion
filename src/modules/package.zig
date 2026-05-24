@@ -142,27 +142,3 @@ pub const Manager = struct {
         }
     }
 };
-
-test "PackageModule: simple help " {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-
-    const aptManager = apt{};
-    const res = try aptManager.install(allocator, io, "bat");
-    defer {
-        allocator.free(res.stdout);
-        allocator.free(res.stderr);
-    }
-    std.debug.print("Apt manager stdout: \n{s}\n", .{res.stdout});
-    std.debug.print("Apt manager stderr: \n{s}\n", .{res.stderr});
-}
-
-test "PackageModule[apt]: test checkVersion" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-
-    const aptManager = Manager.init(allocator);
-    if (try aptManager.checkVersion(io, "neovim", "0.9.5-6ubuntu2")) {
-        std.debug.print("package neovim: OK\n", .{});
-    }
-}

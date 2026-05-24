@@ -8,18 +8,31 @@ local fileMode(mode) =
   std.foldl(function(acc, digit) acc * 8 + std.parseInt(digit), digits, 0);
 
 local shellExec = std.native('shellExec');
+local apt_updated = shellExec('[ -f /root/apt-updated ] && echo -n updated || true');
 
 // Simple miniminion manifest for docker setup
-{
-  kernel_info: Resource(
-    'file',
-    {
-      path: '/home/vagrant/kernel_info',
-      content: shellExec('uname -a'),
-    },
-  ),
 
-  common_deps: Resource('package', { name: 'apt-transport-https' }),
+// Updating cache on the first time
+(if apt_updated != 'updated' then {
+   kernel_info: Resource(
+     'shell',
+     {
+       command: 'apt update && touch /root/apt-updated',
+     },
+   ),
+ } else {})
+
++
+
+// Other part of state
+{
+  common_deps: Resource(
+    'package',
+    {
+      name: 'apt-transport-https',
+    },
+    deps=(if apt_updated != 'updated' then ['kernel_info'] else [])
+  ),
 
   docker_pkg: Resource(
     'package',

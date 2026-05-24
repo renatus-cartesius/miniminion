@@ -17,11 +17,6 @@ pub const File = struct {
         self.allocator = allocator;
     }
 
-    pub fn help(self: File) void {
-        _ = self;
-        std.debug.print("file help: resource for managing files\n", .{});
-    }
-
     pub fn apply(self: *File) !bool {
         // Try to open existing file, create if it doesn't exist
         const io = self.io orelse return error.IoNotInitialized;
@@ -53,9 +48,9 @@ pub const File = struct {
             if (std.mem.eql(u8, content, self.content)) {
                 file.close(io);
                 if (permissions_updated) {
-                    std.debug.print("file {s} permissions updated\n", .{self.path});
+                    std.debug.print("file: {s} permissions updated\n", .{self.path});
                 } else {
-                    std.debug.print("file {s} OK\n", .{self.path});
+                    std.debug.print("file: {s} OK\n", .{self.path});
                 }
                 return permissions_updated;
             }
@@ -72,7 +67,7 @@ pub const File = struct {
 
             new_file.close(io);
 
-            std.debug.print("file {s} CHANGED, wrote {d} bytes\n", .{ self.path, wrote });
+            std.debug.print("file: {s} CHANGED, wrote {d} bytes\n", .{ self.path, wrote });
             return true;
         } else |err| {
             if (err == error.FileNotFound) {
@@ -90,7 +85,7 @@ pub const File = struct {
 
                 new_file.close(io);
 
-                std.debug.print("file {s} CREATED, wrote {d} bytes\n", .{ self.path, wrote });
+                std.debug.print("file: {s} CREATED, wrote {d} bytes\n", .{ self.path, wrote });
                 return true;
             } else {
                 return err;
@@ -119,7 +114,7 @@ pub const Package = struct {
         // check if package already installed
         if (try self.mgr.?.checkVersion(self.io.?, self.name, self.version)) {
             // package installed with correct version if specified
-            std.debug.print("package {s}={s} : OK\n", .{ self.name, self.version orelse "latest" });
+            std.debug.print("package: {s}={s} : OK\n", .{ self.name, self.version orelse "latest" });
             return false;
         } else {
             // reinstalling package with correct version
@@ -128,21 +123,47 @@ pub const Package = struct {
                 self.name,
                 self.version,
             );
-            std.debug.print("package {s}: CHANGED installed\n", .{self.name});
+            std.debug.print("package: {s} CHANGED installed\n", .{self.name});
             return true;
         }
+    }
+};
+
+pub const Shell = struct {
+    command: []const u8,
+    io: ?std.Io = null,
+    allocator: ?std.mem.Allocator = null,
+
+    pub fn init(self: *Shell, io: std.Io, allocator: std.mem.Allocator) !void {
+        self.io = io;
+        self.allocator = allocator;
+    }
+
+    pub fn apply(self: *Shell) !bool {
+        const io = self.io orelse return error.IoNotInitialized;
+        const allocator = self.allocator orelse return error.AllocatorNotInitialized;
+
+        const argv = [_][]const u8{ "sh", "-c", self.command };
+        const result = try cmd.run(allocator, io, &argv);
+        defer {
+            allocator.free(result.stderr);
+            allocator.free(result.stdout);
+        }
+
+        if (result.term.exited == 0) {
+            std.debug.print("shell: command CHANGED\n", .{});
+            return true;
+        }
+
+        std.debug.print("shell: command FAILED, exit code: {}\n", .{result.term.exited});
+        return true;
     }
 };
 
 pub const ResourceData = union(enum) {
     file: File,
     package: Package,
-
-    pub fn help(self: ResourceData) void {
-        switch (self) {
-            inline else => |case| case.help(),
-        }
-    }
+    shell: Shell,
 
     pub fn apply(self: *ResourceData) !bool {
         switch (self.*) {
@@ -202,7 +223,7 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
         }
         const deps = try deps_array.toOwnedSlice(allocator);
 
-        // Parse file or package based on type
+        // Parse resource based on type
         if (std.mem.eql(u8, type_name, "file")) {
             const path_field = resource_data.object.get("path") orelse continue;
             const content_field = resource_data.object.get("content") orelse continue;
@@ -232,6 +253,17 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
                 .deps = deps,
             };
             try resources.append(allocator, package_resource);
+        } else if (std.mem.eql(u8, type_name, "shell")) {
+            const command_field = resource_data.object.get("command") orelse continue;
+
+            const shell_resource = Resource{
+                .name = resource_name,
+                .data = ResourceData{ .shell = Shell{
+                    .command = command_field.string,
+                } },
+                .deps = deps,
+            };
+            try resources.append(allocator, shell_resource);
         }
     }
 
@@ -246,13 +278,17 @@ test "Resource: simple state execution" {
 
     const json =
         \\{
+        \\  "apt-update": {
+        \\    "type": "shell",
+        \\    "command": "apt update -y"
+        \\  },
         \\  "setup-shell": {
         \\    "type": "file",
         \\    "path": "/home/user/.zshrc",
         \\    "content": "alias z=zig",
         \\    "deps": ["hosts-config", "compiler"]
         \\  },
-        \\  "hosts-config": {resou
+        \\  "hosts-config": {
         \\    "type": "file",
         \\    "path": "/etc/hosts",
         \\    "content": "asdfsdf",
@@ -281,6 +317,7 @@ test "Resource: simple state execution" {
         switch (r.data) {
             .file => |f| print("\tfilepath: {s}, content: {s}\n", .{ f.path, f.content }),
             .package => |p| print("\tname: {s}, version: {s}\n", .{ p.name, p.version orelse "unset" }),
+            .shell => |s| print("\tcommand: {s}\n", .{s.command}),
         }
 
         for (r.deps) |d| {
