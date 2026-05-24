@@ -8,7 +8,7 @@ pub fn main(init: std.process.Init) !void {
 
     const allocator = init.arena.allocator();
 
-    const file_path = "/minim.jsonnet";
+    const file_path = "./minim.jsonnet";
 
     const manifest_data = try manifest.Manifest.load(allocator, io, file_path);
     defer allocator.free(manifest_data.json_output);

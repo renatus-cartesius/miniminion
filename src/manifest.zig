@@ -1,7 +1,14 @@
 const std = @import("std");
+const cmd = @import("modules/utils/cmd.zig");
 const c = @cImport({
     @cInclude("libjsonnet.h");
 });
+
+const CallbackCtx = struct {
+    vm: *c.JsonnetVm,
+    io: std.Io,
+    allocator: std.mem.Allocator,
+};
 
 pub const Manifest = struct {
     json_output: []const u8,
@@ -9,6 +16,21 @@ pub const Manifest = struct {
     pub fn load(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8) !Manifest {
         const vm = c.jsonnet_make() orelse return error.JsonnetVmMakeError;
         defer c.jsonnet_destroy(vm);
+
+        var ctx = CallbackCtx{
+            .vm = vm,
+            .io = io,
+            .allocator = allocator,
+        };
+
+        const params = [_:null]?[*:0]const u8{ "cmd", null };
+        c.jsonnet_native_callback(
+            vm,
+            "shellExec",
+            shellExec,
+            &ctx,
+            @ptrCast(&params),
+        );
 
         var file = try std.Io.Dir.openFile(std.Io.Dir.cwd(), io, file_path, .{});
         defer file.close(io);
@@ -33,4 +55,58 @@ pub const Manifest = struct {
 
         return error.JsonnetEvalError;
     }
+
+    fn shellExec(
+        ctx: ?*anyopaque,
+        argv: [*c]const ?*const c.JsonnetJsonValue,
+        success: [*c]c_int,
+    ) callconv(.c) ?*c.JsonnetJsonValue {
+        const cbctx: *CallbackCtx = @ptrCast(@alignCast(ctx));
+
+        // Using self.io and self.allocator here
+
+        const shell_cmd_json = argv[0] orelse {
+            success.* = 0;
+            return makeString(cbctx.vm, "missing cmd argument");
+        };
+
+        const shell_cmd = c.jsonnet_json_extract_string(cbctx.vm, shell_cmd_json) orelse {
+            success.* = 0;
+            return makeString(cbctx.vm, "argument must be a string");
+        };
+
+        const cmd_argv = [_][]const u8{ "sh", "-c", std.mem.span(shell_cmd) };
+        const res = cmd.run(cbctx.allocator, cbctx.io, &cmd_argv) catch {
+            success.* = 0;
+            return makeString(cbctx.vm, "error on running shell");
+        };
+        defer {
+            cbctx.allocator.free(res.stdout);
+            cbctx.allocator.free(res.stderr);
+        }
+
+        if (res.term == .exited and res.term.exited != 0) {
+            success.* = 0;
+
+            const msg = std.fmt.allocPrint(
+                cbctx.allocator,
+                "native shell exec failed with error: \n{s}",
+                .{res.stderr},
+            ) catch {
+                return makeString(cbctx.vm, "failed to format shell exec error message");
+            };
+            defer cbctx.allocator.free(msg);
+
+            return makeString(cbctx.vm, msg);
+        }
+
+        const trimmed = std.mem.trimEnd(u8, res.stdout, "\n");
+        success.* = 1;
+        return makeString(cbctx.vm, trimmed);
+    }
 };
+
+fn makeString(vm: *c.JsonnetVm, s: []const u8) *c.JsonnetJsonValue {
+    const res = c.jsonnet_json_make_string(vm, s.ptr).?;
+    return res;
+}
