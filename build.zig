@@ -17,13 +17,38 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libgcc_eh.a" });
 
     exe.root_module.linkSystemLibrary("c", .{});
+    exe.root_module.linkSystemLibrary("bpf", .{});
     // exe.linkage = .static;
+
+    try buildBpfProgs(b);
 
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
     const run_step = b.step("run", "Run miniminion binary");
     run_step.dependOn(&run_cmd.step);
+}
+
+// builds all src/bpf_sensors one by one
+pub fn buildBpfProgs(b: *std.Build) !void {
+    const sensors_to_build = [_][]const u8{
+        "file",
+        // " hello",
+    };
+
+    inline for (sensors_to_build) |sensor| {
+        const src = "src/bpf_sensors/" ++ sensor ++ ".c";
+        const out = "src/bpf_sensors/obj/" ++ sensor ++ ".o";
+
+        const clang = b.addSystemCommand(&.{
+            "clang",   "-g",
+            "-O2",     "-D__TARGET_ARCH_x86",
+            "-target", "bpf",
+            "-c",      src,
+            "-o",      out,
+        });
+        b.getInstallStep().dependOn(&clang.step);
+    }
 }
 
 // pub fn build(b: *std.Build) void {

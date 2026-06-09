@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y \
     xz-utils \
     git \
     g++ \
+    clang \
+    llvm \
+    libbpf-dev \
     make \
     cmake \
     libc++-dev \

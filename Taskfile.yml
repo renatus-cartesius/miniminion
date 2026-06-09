@@ -11,9 +11,10 @@ tasks:
   build:
     desc: Build the miniminion project inside Zig container
     cmds:
-      - docker run --rm -v .:/workspace -w /workspace miniminion-builder zig build -Doptimize=Debug
+      - docker run --rm -v .:/workspace -w /workspace miniminion-builder zig build -Doptimize=Debug --summary all
     sources:
       - src/**/*.zig
+      - src/**/*.c
       - build.zig
     generates:
       - zig-out/bin/miniminion
@@ -30,6 +31,7 @@ tasks:
     cmds:
       - scp  -i ~/.ssh/vagrant_ecdsa ./zig-out/bin/miniminion root@192.168.56.2:/root/
       - scp  -i ~/.ssh/vagrant_ecdsa ./minim.jsonnet root@192.168.56.2:/root/
+      - task: v-run-trace
     failfast: true
     deps:
       - build
@@ -40,6 +42,7 @@ tasks:
     dir: './testing'
     cmds:
       - task: v-destroy
+      - task: v-up
       - task: v-deploy
       - task: v-run
 
@@ -51,7 +54,16 @@ tasks:
 
   v-run:
     desc: Run minim from vagrant vm
-    cmd: "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- /root/miniminion"
+    cmds:
+      - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- rm -rf /sys/fs/bpf/*"
+      - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- /root/miniminion"
+
+  v-run-trace:
+    desc: Run minim from vagrant vm with bpf tracelog
+    cmds:
+      - task: v-run
+      - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- killall bpftool || true"
+      - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- bpftool prog tracelog"
 
   v-destroy:
     desg: Destroy vagrant vm
