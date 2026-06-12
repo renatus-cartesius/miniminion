@@ -3,75 +3,76 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-const char target[] = "foobar";
-
-#define MAX_PATH_LEN 4096
-#define MAX_DEPTH 128
 #define NAME_MAX 32
+#define MAX_DEPTH 20
+
+struct trie_key {
+  u32 parent_node_id;
+  char name[NAME_MAX];
+};
+
+struct trie_value {
+  u32 next_node_id;
+  u8 is_terminal;
+};
 
 struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, char[MAX_PATH_LEN]);
-} path_heap SEC(".maps");
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, 4096);
+  __type(key, struct trie_key);
+  __type(value, struct trie_value);
+} path_trie_map SEC(".maps");
 
-SEC("fexit/vfs_open")
-int BPF_PROG(trace_foobar_change, const struct path *path, struct file *file,
-             int ret) {
-
-  char filename_buf[NAME_MAX];
-  const char *fname_ptr = BPF_CORE_READ(path, dentry, d_name.name);
-  int flen =
-      bpf_probe_read_kernel_str(filename_buf, sizeof(filename_buf), fname_ptr);
-  if (flen <= 1)
-    return 0;
-  if (bpf_strncmp(filename_buf, sizeof(target), target) != 0)
+SEC("fexit/vfs_write")
+int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
+             size_t count, loff_t *pos, ssize_t ret) {
+  if (ret <= 0 || !file)
     return 0;
 
-  u32 zero = 0;
-  char *buf = bpf_map_lookup_elem(&path_heap, &zero);
-  if (!buf)
-    return 0;
-
-  int pos = MAX_PATH_LEN - 1;
-  buf[pos] = '\0';
-
-  struct dentry *dent = BPF_CORE_READ(path, dentry);
+  struct dentry *dent = BPF_CORE_READ(file, f_path.dentry);
   struct dentry *parent;
 
+  u32 current_parent_id = 0;
+  char name_buf[NAME_MAX];
+
+#pragma unroll
   for (int i = 0; i < MAX_DEPTH; i++) {
+    if (!dent)
+      break;
+
     parent = BPF_CORE_READ(dent, d_parent);
     if (dent == parent)
       break;
 
-    char name[NAME_MAX];
     const char *name_ptr = BPF_CORE_READ(dent, d_name.name);
-    int len = bpf_probe_read_kernel_str(name, sizeof(name), name_ptr);
-    if (len <= 1)
-      break;
-    len--;
-
-    pos -= len;
-    if (pos < 1 || pos >= MAX_PATH_LEN)
+    if (!name_ptr)
       break;
 
-    bpf_probe_read_kernel(buf + (pos & (MAX_PATH_LEN - 1)), len, name);
+    __builtin_memset(name_buf, 0, sizeof(name_buf));
+    bpf_probe_read_kernel_str(name_buf, sizeof(name_buf), name_ptr);
 
-    pos -= 1;
-    if (pos < 0 || pos >= MAX_PATH_LEN)
-      break;
-    buf[pos & (MAX_PATH_LEN - 1)] = '/';
+    struct trie_key key = {
+        .parent_node_id = current_parent_id,
+    };
+    __builtin_memcpy(key.name, name_buf, NAME_MAX);
 
+    struct trie_value *val = bpf_map_lookup_elem(&path_trie_map, &key);
+
+    if (!val) {
+      return 0;
+    }
+
+    if (val->is_terminal) {
+      if (BPF_CORE_READ(parent, d_parent) == parent) {
+        char fmt[] = "ALERT: Drift detected via Trie Step-by-Step Match!\n";
+        bpf_trace_printk(fmt, sizeof(fmt));
+        return 0;
+      }
+    }
+
+    current_parent_id = val->next_node_id;
     dent = parent;
   }
-
-  if (pos < 0 || pos >= MAX_PATH_LEN)
-    return 0;
-
-  pos &= (MAX_PATH_LEN - 1);
-  char fmt[] = "path: %s\n";
-  bpf_trace_printk(fmt, sizeof(fmt), buf + pos);
 
   return 0;
 }
