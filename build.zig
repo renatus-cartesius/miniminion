@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.linkSystemLibrary("bpf", .{});
     // exe.linkage = .static;
 
-    try buildBpfProgs(b);
+    try buildBpfProgs(b, exe);
 
     b.installArtifact(exe);
 
@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
 }
 
 // builds all src/bpf_sensors one by one
-pub fn buildBpfProgs(b: *std.Build) !void {
+pub fn buildBpfProgs(b: *std.Build, exe: *std.Build.Step.Compile) !void {
     const sensors_to_build = [_][]const u8{
         "file",
         // " hello",
@@ -47,7 +47,8 @@ pub fn buildBpfProgs(b: *std.Build) !void {
             "-c",      src,
             "-o",      out,
         });
-        b.getInstallStep().dependOn(&clang.step);
+        // b.getInstallStep().dependOn(&clang.step);
+        exe.step.dependOn(&clang.step);
     }
 }
 
