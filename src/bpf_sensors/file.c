@@ -5,6 +5,18 @@
 
 #define NAME_MAX 32
 #define MAX_DEPTH 20
+#define PATH_BUF_SIZE (NAME_MAX * MAX_DEPTH + MAX_DEPTH + 1)
+
+struct path_buf {
+  char data[PATH_BUF_SIZE];
+};
+
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __type(key, u32);
+  __type(value, struct path_buf);
+  __uint(max_entries, 1);
+} path_heap SEC(".maps");
 
 struct trie_key {
   u32 parent_node_id;
@@ -29,11 +41,28 @@ int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
   if (ret <= 0 || !file)
     return 0;
 
+  u32 zero = 0;
+  struct path_buf *pb = bpf_map_lookup_elem(&path_heap, &zero);
+  if (!pb)
+    return 0;
+
+  __builtin_memset(pb->data, 0, PATH_BUF_SIZE);
+  u32 path_offset = 0;
+
   struct dentry *dent = BPF_CORE_READ(file, f_path.dentry);
   struct dentry *parent;
-
   u32 current_parent_id = 0;
   char name_buf[NAME_MAX];
+
+  // extracting mountpoint from vfsmount
+  struct vfsmount *vfsmnt = BPF_CORE_READ(file, f_path.mnt);
+  struct mount *mnt = (struct mount *)((char *)vfsmnt - bpf_core_field_offset(
+                                                            struct mount, mnt));
+  struct dentry *mp_dentry = BPF_CORE_READ(mnt, mnt_mountpoint);
+  const unsigned char *mnt_name_ptr = BPF_CORE_READ(mp_dentry, d_name.name);
+  char mountpoint_name[128];
+  bpf_probe_read_kernel_str(&mountpoint_name, sizeof(mountpoint_name),
+                            mnt_name_ptr);
 
 #pragma unroll
   for (int i = 0; i < MAX_DEPTH; i++) {
@@ -49,25 +78,35 @@ int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
       break;
 
     __builtin_memset(name_buf, 0, sizeof(name_buf));
-    bpf_probe_read_kernel_str(name_buf, sizeof(name_buf), name_ptr);
+    int name_len =
+        bpf_probe_read_kernel_str(name_buf, sizeof(name_buf), name_ptr);
 
     struct trie_key key = {
         .parent_node_id = current_parent_id,
     };
     __builtin_memcpy(key.name, name_buf, NAME_MAX);
 
-    struct trie_value *val = bpf_map_lookup_elem(&path_trie_map, &key);
+    if (path_offset + 1 + NAME_MAX < PATH_BUF_SIZE) {
 
-    if (!val) {
-      return 0;
+      if (path_offset >= PATH_BUF_SIZE)
+        break;
+
+      pb->data[path_offset] = '/';
+      path_offset += 1;
+
+      // if (path_offset + NAME_MAX > PATH_BUF_SIZE)
+      //   break;
+      __builtin_memcpy(pb->data + (path_offset & 255), name_buf, NAME_MAX);
+      path_offset += (name_len > 1 ? name_len - 1 : 0); // name_len includes \0
     }
 
+    struct trie_value *val = bpf_map_lookup_elem(&path_trie_map, &key);
+    if (!val)
+      return 0;
+
     if (val->is_terminal) {
-      if (BPF_CORE_READ(parent, d_parent) == parent) {
-        char fmt[] = "ALERT: Drift detected via Trie Step-by-Step Match!\n";
-        bpf_trace_printk(fmt, sizeof(fmt));
-        return 0;
-      }
+      bpf_printk("ALERT: wrote: mount=%s,file=%s\n", mountpoint_name, pb->data);
+      return 0;
     }
 
     current_parent_id = val->next_node_id;
