@@ -20,11 +20,13 @@ struct {
 
 struct trie_key {
   u32 parent_node_id;
+  u64 mnt_id;
   char name[NAME_MAX];
 };
 
 struct trie_value {
   u32 next_node_id;
+  u64 mnt_id;
   u8 is_terminal;
 };
 
@@ -35,9 +37,32 @@ struct {
   __type(value, struct trie_value);
 } path_trie_map SEC(".maps");
 
+// SEC("fexit/vfs_write")
+// int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
+//              size_t count, loff_t *pos, ssize_t ret) {
+//
+//   const char name_buf[NAME_MAX];
+//   const char *name_ptr = BPF_CORE_READ(file, f_path.dentry, d_name.name);
+//
+//   unsigned int name_len =
+//       bpf_probe_read_kernel_str(name_buf, sizeof(name_buf), name_ptr);
+//
+//   if (bpf_strncmp(name_buf, 6, "foobar") != 0) {
+//     return 0;
+//   }
+//
+//   struct mount *m =
+//       container_of(BPF_CORE_READ(file, f_path.mnt), struct mount, mnt);
+//   u64 mnt_id = BPF_CORE_READ(m, mnt_id);
+//
+//   bpf_printk("WROTE: mnt_id=%d, file=%s\n", mnt_id, name_buf);
+//   return 0;
+// }
+//
+//
 SEC("fexit/vfs_write")
-int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
-             size_t count, loff_t *pos, ssize_t ret) {
+int BPF_PROG(file_sensor, struct file *file, const char *buf, size_t count,
+             loff_t *pos, ssize_t ret) {
   if (ret <= 0 || !file)
     return 0;
 
@@ -54,15 +79,9 @@ int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
   u32 current_parent_id = 0;
   char name_buf[NAME_MAX];
 
-  // extracting mountpoint from vfsmount
-  struct vfsmount *vfsmnt = BPF_CORE_READ(file, f_path.mnt);
-  struct mount *mnt = (struct mount *)((char *)vfsmnt - bpf_core_field_offset(
-                                                            struct mount, mnt));
-  struct dentry *mp_dentry = BPF_CORE_READ(mnt, mnt_mountpoint);
-  const unsigned char *mnt_name_ptr = BPF_CORE_READ(mp_dentry, d_name.name);
-  char mountpoint_name[128];
-  bpf_probe_read_kernel_str(&mountpoint_name, sizeof(mountpoint_name),
-                            mnt_name_ptr);
+  struct mount *m =
+      container_of(BPF_CORE_READ(file, f_path.mnt), struct mount, mnt);
+  u64 mnt_id = BPF_CORE_READ(m, mnt_id);
 
 #pragma unroll
   for (int i = 0; i < MAX_DEPTH; i++) {
@@ -83,6 +102,7 @@ int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
 
     struct trie_key key = {
         .parent_node_id = current_parent_id,
+        .mnt_id = mnt_id,
     };
     __builtin_memcpy(key.name, name_buf, NAME_MAX);
 
@@ -97,7 +117,7 @@ int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
       // if (path_offset + NAME_MAX > PATH_BUF_SIZE)
       //   break;
       __builtin_memcpy(pb->data + (path_offset & 255), name_buf, NAME_MAX);
-      path_offset += (name_len > 1 ? name_len - 1 : 0); // name_len includes \0
+      path_offset += (name_len > 1 ? name_len - 1 : 0); // name_len includes
     }
 
     struct trie_value *val = bpf_map_lookup_elem(&path_trie_map, &key);
@@ -105,7 +125,7 @@ int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
       return 0;
 
     if (val->is_terminal) {
-      bpf_printk("ALERT: wrote: mount=%s,file=%s\n", mountpoint_name, pb->data);
+      bpf_printk("ALERT: wrote: mountid=%d, file=%s\n", mnt_id, pb->data);
       return 0;
     }
 

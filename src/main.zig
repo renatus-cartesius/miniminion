@@ -8,7 +8,7 @@ const c = @import("c.zig").c;
 pub fn main(init: std.process.Init) !void {
     const prog_pin_path = "/sys/fs/bpf/foobar_bpf_prog";
     const prog_link_pin_path = "/sys/fs/bpf/foobar_bpf_prog_link";
-    const prog_name = "trace_foobar_change";
+    const prog_name = "file_sensor";
 
     // std.debug.print("Removing program pin: {s}\n", .{prog_pin_path});
     // _ = std.os.linux.unlink(prog_pin_path ++ "/" ++ prog_name);
@@ -33,10 +33,10 @@ pub fn main(init: std.process.Init) !void {
     // loading files trie map
     const map_ptr = c.bpf_object__find_map_by_name(obj, "path_trie_map") orelse return error.BpfMapNotFound;
     var global_id: u32 = 1;
-    try bpf_utils.addPathToTrie(init.gpa, map_ptr, "/etc/foobar/foobar.yml", &global_id);
-    try bpf_utils.addPathToTrie(init.gpa, map_ptr, "/tmp/bpf_test.md", &global_id);
-    try bpf_utils.addPathToTrie(init.gpa, map_ptr, "/run/sample", &global_id);
-    try bpf_utils.addPathToTrie(init.gpa, map_ptr, "/root/vagrant-test", &global_id);
+    try bpf_utils.addPathToTrie(init.gpa, init.io, map_ptr, "/etc/foobar/foobar.yml", &global_id);
+    try bpf_utils.addPathToTrie(init.gpa, init.io, map_ptr, "/tmp/bpf_test.md", &global_id);
+    try bpf_utils.addPathToTrie(init.gpa, init.io, map_ptr, "/run/sample", &global_id);
+    try bpf_utils.addPathToTrie(init.gpa, init.io, map_ptr, "/root/vagrant-test", &global_id);
 
     const prog = c.bpf_object__find_program_by_name(obj, prog_name) orelse return error.BpfProgNotFound;
     std.debug.print("Pinning bpf object\n", .{});
