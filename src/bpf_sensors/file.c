@@ -1,11 +1,15 @@
+#define __BPF_SENSOR__
+
+#include "file.h"
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-#define NAME_MAX 32
-#define MAX_DEPTH 20
-#define PATH_BUF_SIZE (NAME_MAX * MAX_DEPTH + MAX_DEPTH + 1)
+struct {
+  __uint(type, BPF_MAP_TYPE_RINGBUF);
+  __uint(max_entries, 256 * 1024);
+} write_rb SEC(".maps");
 
 struct path_buf {
   char data[PATH_BUF_SIZE];
@@ -37,29 +41,6 @@ struct {
   __type(value, struct trie_value);
 } path_trie_map SEC(".maps");
 
-// SEC("fexit/vfs_write")
-// int BPF_PROG(trace_foobar_change, struct file *file, const char *buf,
-//              size_t count, loff_t *pos, ssize_t ret) {
-//
-//   const char name_buf[NAME_MAX];
-//   const char *name_ptr = BPF_CORE_READ(file, f_path.dentry, d_name.name);
-//
-//   unsigned int name_len =
-//       bpf_probe_read_kernel_str(name_buf, sizeof(name_buf), name_ptr);
-//
-//   if (bpf_strncmp(name_buf, 6, "foobar") != 0) {
-//     return 0;
-//   }
-//
-//   struct mount *m =
-//       container_of(BPF_CORE_READ(file, f_path.mnt), struct mount, mnt);
-//   u64 mnt_id = BPF_CORE_READ(m, mnt_id);
-//
-//   bpf_printk("WROTE: mnt_id=%d, file=%s\n", mnt_id, name_buf);
-//   return 0;
-// }
-//
-//
 SEC("fexit/vfs_write")
 int BPF_PROG(file_sensor, struct file *file, const char *buf, size_t count,
              loff_t *pos, ssize_t ret) {
@@ -125,7 +106,18 @@ int BPF_PROG(file_sensor, struct file *file, const char *buf, size_t count,
       return 0;
 
     if (val->is_terminal) {
-      bpf_printk("ALERT: wrote: mountid=%d, file=%s\n", mnt_id, pb->data);
+
+      // pushing event to ringbuf
+      struct write_event *e;
+
+      e = bpf_ringbuf_reserve(&write_rb, sizeof(*e), 0);
+      if (!e)
+        return 0;
+      e->mnt_id = mnt_id;
+      __builtin_memcpy(e->path, pb->data, PATH_BUF_SIZE);
+      bpf_ringbuf_submit(e, 0);
+
+      bpf_printk("DEBUG=wrote: mountid=%d, file=%s\n", mnt_id, pb->data);
       return 0;
     }
 

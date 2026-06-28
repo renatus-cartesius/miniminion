@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.linkSystemLibrary("bpf", .{});
     // exe.linkage = .static;
 
+    exe.root_module.addIncludePath(.{ .cwd_relative = "src/bpf_sensors" });
     try buildBpfProgs(b, exe);
 
     b.installArtifact(exe);
