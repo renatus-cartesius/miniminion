@@ -15,7 +15,7 @@ pub fn main(init: std.process.Init) !void {
     // std.debug.print("Removing link pin: {s}\n", .{prog_link_pin_path});
     // _ = std.os.linux.unlink(prog_link_pin_path);
 
-    const bpf_bytecode: []const u8 = @embedFile("./bpf_sensors/obj/file.o");
+    const bpf_bytecode: []const u8 = @embedFile("./bpf/obj/file_sensor.o");
     std.debug.print("Openning bpf bytecode\n", .{});
     const obj = c.bpf_object__open_mem(
         bpf_bytecode.ptr,

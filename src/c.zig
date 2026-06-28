@@ -1,4 +1,4 @@
 pub const c = @cImport({
     @cInclude("bpf/libbpf.h");
-    @cInclude("file.h");
+    @cInclude("file_sensor.h");
 });

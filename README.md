@@ -8,5 +8,5 @@ Minim uses jsonnet for declarative state description.
 
 - [ ] implement a fact-like mechanism in the state compilation runtime.
 - [ ] add more relation types for resources (not only dependencies) such as "requires" in the saltstack.
-- [ ] add a bpf sensors layer for tracking resources state by tracing some kernel events (for example running fexit for sys_write on a file, that controlled by the minim resource)
+- [x] add a bpf sensors layer for tracking resources state by tracing some kernel events (for example running fexit for sys_write on a file, that controlled by the minim resource)
 - [ ] implement a drift checker/watcher for resources and overall state, that utilizes sensors layer

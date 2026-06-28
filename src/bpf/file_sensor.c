@@ -1,6 +1,6 @@
 #define __BPF_SENSOR__
 
-#include "file.h"
+#include "file_sensor.h"
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
