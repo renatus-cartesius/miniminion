@@ -1,164 +1,11 @@
 const std = @import("std");
 const dag = @import("dag.zig");
-const package = @import("modules/package.zig");
-const cmd = @import("modules/utils/cmd.zig");
+
+const File = @import("resources/file.zig");
+const Package = @import("resources/package.zig");
+const Shell = @import("resources/shell.zig");
 
 pub const ResourceErrors = error{ MissingType, NotFoundResource, IoNotInitialized, AllocatorNotInitialized };
-
-pub const File = struct {
-    path: []const u8,
-    content: []const u8 = "",
-    mode: u32 = 0o655,
-    io: ?std.Io = null,
-    allocator: ?std.mem.Allocator = null,
-
-    pub fn init(self: *File, io: std.Io, allocator: std.mem.Allocator) !void {
-        self.io = io;
-        self.allocator = allocator;
-    }
-
-    pub fn apply(self: *File) !bool {
-        // Try to open existing file, create if it doesn't exist
-        const io = self.io orelse return error.IoNotInitialized;
-        const allocator = self.allocator orelse return error.AllocatorNotInitialized;
-        const open_result = std.Io.Dir.openFile(.cwd(), io, self.path, .{ .mode = .read_write });
-        if (open_result) |file| {
-            // File exists, check content and permissions
-            const buf = try allocator.alloc(u8, 1024 * 1024);
-            defer allocator.free(buf);
-            var reader = file.reader(io, buf);
-            const content = try reader.interface.readAlloc(allocator, try file.length(io));
-
-            // Check and set file mode/permissions if needed
-            const file_stat = try std.Io.Dir.statFile(.cwd(), io, self.path, .{});
-            const expected_perms = std.Io.File.Permissions.fromMode(self.mode);
-            var permissions_updated = false;
-
-            // Compare only the permission bits, not the full enum values
-            // The stat result includes file type bits (e.g., 0o100000 for regular files)
-            // while fromMode only creates permission bits
-            const current_mode_bits = @intFromEnum(file_stat.permissions) & 0o777;
-            const expected_mode_bits = @intFromEnum(expected_perms) & 0o777;
-
-            if (current_mode_bits != expected_mode_bits) {
-                try std.Io.Dir.setFilePermissions(.cwd(), io, self.path, expected_perms, .{});
-                permissions_updated = true;
-            }
-
-            if (std.mem.eql(u8, content, self.content)) {
-                file.close(io);
-                if (permissions_updated) {
-                    std.debug.print("file: {s} permissions updated\n", .{self.path});
-                } else {
-                    std.debug.print("file: {s} OK\n", .{self.path});
-                }
-                return permissions_updated;
-            }
-
-            // Content differs, update file by closing and reopening with truncate
-            file.close(io);
-
-            const options: std.Io.Dir.CreateFileOptions = .{ .read = true, .truncate = true, .permissions = std.Io.File.Permissions.fromMode(self.mode) };
-            var new_file = try std.Io.Dir.createFile(.cwd(), io, self.path, options);
-
-            var writer = new_file.writer(io, buf);
-            const wrote = try writer.interface.write(self.content);
-            _ = try writer.flush();
-
-            new_file.close(io);
-
-            std.debug.print("file: {s} CHANGED, wrote {d} bytes\n", .{ self.path, wrote });
-            return true;
-        } else |err| {
-            if (err == error.FileNotFound) {
-                // File doesn't exist, create it with specified mode
-                const perms = std.Io.File.Permissions.fromMode(self.mode);
-                const options: std.Io.Dir.CreateFileOptions = .{ .read = true, .truncate = true, .permissions = perms };
-                var new_file = try std.Io.Dir.createFile(.cwd(), io, self.path, options);
-
-                // Write content to new file
-                const buf = try allocator.alloc(u8, 1024 * 1024);
-                defer allocator.free(buf);
-                var writer = new_file.writer(io, buf);
-                const wrote = try writer.interface.write(self.content);
-                _ = try writer.flush();
-
-                new_file.close(io);
-
-                std.debug.print("file: {s} CREATED, wrote {d} bytes\n", .{ self.path, wrote });
-                return true;
-            } else {
-                return err;
-            }
-        }
-    }
-};
-
-pub const Package = struct {
-    name: []const u8,
-    version: ?[]const u8 = null,
-    mgr: ?package.Manager = null,
-    io: ?std.Io = null,
-    allocator: ?std.mem.Allocator = null,
-
-    pub fn init(self: *Package, io: std.Io, allocator: std.mem.Allocator) !void {
-        self.allocator = allocator;
-        self.io = io;
-        self.mgr = package.Manager.init(allocator);
-    }
-
-    pub fn apply(self: *Package) !bool {
-        // self.mgr.install(name, ?version) => installs a package of the specified version or simply installs it without specifying a version(depending on the specific package manager)
-        // self.mgr.checkVersion(name, ?version) => checks that the package of the required version is installed of that it is installed at all
-
-        // check if package already installed
-        if (try self.mgr.?.checkVersion(self.io.?, self.name, self.version)) {
-            // package installed with correct version if specified
-            std.debug.print("package: {s}={s} : OK\n", .{ self.name, self.version orelse "latest" });
-            return false;
-        } else {
-            // reinstalling package with correct version
-            try self.mgr.?.install(
-                self.io.?,
-                self.name,
-                self.version,
-            );
-            std.debug.print("package: {s} CHANGED installed\n", .{self.name});
-            return true;
-        }
-    }
-};
-
-pub const Shell = struct {
-    command: []const u8,
-    io: ?std.Io = null,
-    allocator: ?std.mem.Allocator = null,
-
-    pub fn init(self: *Shell, io: std.Io, allocator: std.mem.Allocator) !void {
-        self.io = io;
-        self.allocator = allocator;
-    }
-
-    pub fn apply(self: *Shell) !bool {
-        const io = self.io orelse return error.IoNotInitialized;
-        const allocator = self.allocator orelse return error.AllocatorNotInitialized;
-
-        const argv = [_][]const u8{ "sh", "-c", self.command };
-        const result = try cmd.run(allocator, io, &argv);
-        defer {
-            allocator.free(result.stderr);
-            allocator.free(result.stdout);
-        }
-
-        if (result.term.exited == 0) {
-            std.debug.print("shell: command CHANGED\n", .{});
-            return true;
-        }
-
-        std.debug.print("shell: command FAILED, exit code: {}\n", .{result.term.exited});
-        return true;
-    }
-};
 
 pub const ResourceData = union(enum) {
     file: File,
@@ -231,11 +78,7 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
 
             const file_resource = Resource{
                 .name = resource_name,
-                .data = ResourceData{ .file = File{
-                    .path = path_field.string,
-                    .content = content_field.string,
-                    .mode = @intCast(mode_field.integer),
-                } },
+                .data = ResourceData{ .file = File.create(path_field.string, content_field.string, @intCast(mode_field.integer)) },
                 .deps = deps,
             };
             try resources.append(allocator, file_resource);
@@ -245,11 +88,7 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
 
             const package_resource = Resource{
                 .name = resource_name,
-                .data = ResourceData{ .package = Package{
-                    .name = name_field.string,
-                    .version = if (version_field) |v| v.string else null,
-                    .mgr = package.Manager.init(allocator),
-                } },
+                .data = ResourceData{ .package = Package.create(name_field.string, if (version_field) |v| v.string else null) },
                 .deps = deps,
             };
             try resources.append(allocator, package_resource);
@@ -258,9 +97,7 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
 
             const shell_resource = Resource{
                 .name = resource_name,
-                .data = ResourceData{ .shell = Shell{
-                    .command = command_field.string,
-                } },
+                .data = ResourceData{ .shell = Shell.create(command_field.string) },
                 .deps = deps,
             };
             try resources.append(allocator, shell_resource);
@@ -314,12 +151,6 @@ test "Resource: simple state execution" {
         try rmap.put(r.name, try rdag.addNode(r));
 
         print("Resource {s}:\n", .{r.name});
-        switch (r.data) {
-            .file => |f| print("\tfilepath: {s}, content: {s}\n", .{ f.path, f.content }),
-            .package => |p| print("\tname: {s}, version: {s}\n", .{ p.name, p.version orelse "unset" }),
-            .shell => |s| print("\tcommand: {s}\n", .{s.command}),
-        }
-
         for (r.deps) |d| {
             print("\t\tDependency: {s}\n", .{d});
         }
