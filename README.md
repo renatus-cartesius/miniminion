@@ -4,6 +4,14 @@ Simple pull-based(for now only for local running, without pulling state from the
 
 Minim uses jsonnet for declarative state description.
 
+## Concepts
+
+Minim has a core concepts familiar to users of other popular cm systems, like Salt, Puppet and others.
+
+- *Resource*: an entity through which any host element (file, package, systemd unit, etc.) is controlled.
+- *State*: direct acyclic graph of resources.
+- *Sensors*: bpf programs for a resource that monitor it's state, logging all kernel change operations to obtain drift.
+
 ## TODO
 
 - [ ] implement a fact-like mechanism in the state compilation runtime.
