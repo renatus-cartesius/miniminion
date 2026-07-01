@@ -12,6 +12,10 @@ pub const ResourceData = union(enum) {
     package: Package,
     shell: Shell,
 
+    pub fn typeName(self: ResourceData) []const u8 {
+        return @tagName(self);
+    }
+
     pub fn apply(self: *ResourceData) !bool {
         switch (self.*) {
             inline else => |*case| return try case.apply(),

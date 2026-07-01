@@ -26,11 +26,17 @@ pub fn apply(self: *Self) !bool {
         allocator.free(result.stdout);
     }
 
-    if (result.term.exited == 0) {
-        std.debug.print("shell: command CHANGED\n", .{});
+    if (result.term == .exited and result.term.exited == 0) {
         return true;
     }
 
-    std.debug.print("shell: command FAILED, exit code: {}\n", .{result.term.exited});
-    return true;
+    if (result.term == .exited) {
+        const exit_code = result.term.exited;
+        const stderr_trimmed = std.mem.trim(u8, result.stderr, "\n");
+        if (stderr_trimmed.len > 0) {
+            std.debug.print("  stderr: {s}\n", .{stderr_trimmed});
+        }
+        std.debug.print("  exit code: {}\n", .{exit_code});
+    }
+    return error.ShellCommandFailed;
 }

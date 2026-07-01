@@ -40,11 +40,6 @@ pub fn apply(self: *Self) !bool {
 
         if (std.mem.eql(u8, content, self.content)) {
             file.close(io);
-            if (permissions_updated) {
-                std.debug.print("file: {s} permissions updated\n", .{self.path});
-            } else {
-                std.debug.print("file: {s} OK\n", .{self.path});
-            }
             return permissions_updated;
         }
 
@@ -54,12 +49,10 @@ pub fn apply(self: *Self) !bool {
         var new_file = try std.Io.Dir.createFile(.cwd(), io, self.path, options);
 
         var writer = new_file.writer(io, buf);
-        const wrote = try writer.interface.write(self.content);
+        _ = try writer.interface.write(self.content);
         _ = try writer.flush();
 
         new_file.close(io);
-
-        std.debug.print("file: {s} CHANGED, wrote {d} bytes\n", .{ self.path, wrote });
         return true;
     } else |err| {
         if (err == error.FileNotFound) {
@@ -70,12 +63,10 @@ pub fn apply(self: *Self) !bool {
             const buf = try allocator.alloc(u8, 1024 * 1024);
             defer allocator.free(buf);
             var writer = new_file.writer(io, buf);
-            const wrote = try writer.interface.write(self.content);
+            _ = try writer.interface.write(self.content);
             _ = try writer.flush();
 
             new_file.close(io);
-
-            std.debug.print("file: {s} CREATED, wrote {d} bytes\n", .{ self.path, wrote });
             return true;
         } else {
             return err;

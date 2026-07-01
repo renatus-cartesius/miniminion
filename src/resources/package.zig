@@ -20,7 +20,6 @@ pub fn init(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
 
 pub fn apply(self: *Self) !bool {
     if (try self.mgr.?.checkVersion(self.io.?, self.name, self.version)) {
-        std.debug.print("package: {s}={s} : OK\n", .{ self.name, self.version orelse "latest" });
         return false;
     } else {
         try self.mgr.?.install(
@@ -28,8 +27,6 @@ pub fn apply(self: *Self) !bool {
             self.name,
             self.version,
         );
-        std.debug.print("package: {s} CHANGED installed\n", .{self.name});
         return true;
     }
 }
-

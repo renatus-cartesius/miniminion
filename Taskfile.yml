@@ -29,13 +29,19 @@ tasks:
   v-deploy:
     desc: Deploy miniminion binary and config to Vagrant VM
     cmds:
-      - scp  -i ~/.ssh/vagrant_ecdsa ./zig-out/bin/miniminion root@192.168.56.2:/root/
-      - scp  -i ~/.ssh/vagrant_ecdsa ./minim.jsonnet root@192.168.56.2:/root/
-      - task: v-run
+      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./zig-out/bin/miniminion root@192.168.56.2:/root/
+      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./minim.jsonnet root@192.168.56.2:/root/
+      - task: v-examples-copy
+      # - task: v-run
     failfast: true
     deps:
       - build
       # - v-up
+
+  v-examples-copy:
+    desc: Copy examples directory to Vagrant VM
+    cmds:
+      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./examples/ root@192.168.56.2:/root/examples/
   
   v-redeploy:
     desc: Recreate vm and deploy files

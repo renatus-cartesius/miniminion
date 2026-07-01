@@ -1,5 +1,7 @@
 # Miniminion (minim)
 
+![](./docs/kube_master_example_setup.png)
+
 Simple pull-based(for now only for local running, without pulling state from the control plane) configurations management system (alternative for salt, puppet, chef, etc.). 
 
 Minim uses jsonnet for declarative state description.
