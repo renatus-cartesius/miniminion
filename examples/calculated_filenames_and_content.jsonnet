@@ -13,7 +13,7 @@ local fileMode(mode) =
   some_file_0: Resource(
     'file',
     {
-      path: './tmp/miniminion_file_0',
+      path: '/tmp/miniminion_file_0',
       content: 'hello from file 0\n',
       mode: fileMode('777'),
     },
