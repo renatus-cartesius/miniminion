@@ -44,7 +44,6 @@ tasks:
       - task: v-destroy
       - task: v-up
       - task: v-deploy
-      - task: v-run
 
   v-ssh:
     desc: Login into vagrant vm

@@ -30,7 +30,14 @@ pub const Manifest = struct {
         defer allocator.free(content);
 
         var error_found: i32 = 0;
+        var ts_start: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts_start);
         const result_ptr = c.jsonnet_evaluate_snippet(vm, &file_path[0], &content[0], &error_found);
+        var ts_end: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts_end);
+        const elapsed_ns = (@as(i128, ts_end.sec) - @as(i128, ts_start.sec)) * std.time.ns_per_s + (@as(i128, ts_end.nsec) - @as(i128, ts_start.nsec));
+        const elapsed_ms: f64 = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, std.time.ns_per_ms);
+        std.debug.print("Jsonnet evaluation took {d:.2}ms\n", .{elapsed_ms});
 
         if (error_found != 0) {
             if (result_ptr) |ptr| {
