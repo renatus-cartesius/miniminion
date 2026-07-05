@@ -1,16 +1,15 @@
+require 'yaml'
+
+instances = YAML.load_file(File.join(__dir__, 'instances.yaml'))['instances']
+
 Vagrant.configure("2") do |config|
   config.ssh.insert_key = false
   ssh_pub_key = File.readlines("#{Dir.home}/.ssh/vagrant_ecdsa.pub").first.strip
 
-  instances = [
-    { name: "ubuntu", box: "bento/ubuntu-24.04",  ip: "192.168.56.2", memory: "3072", cpus: 2 },
-    { name: "centos", box: "bento/centos-stream-9", ip: "192.168.56.3", memory: "1024", cpus: 1 },
-  ]
-
-  instances.each do |inst|
-    config.vm.define inst[:name] do |vm|
-      vm.vm.box = inst[:box]
-      vm.vm.network "private_network", ip: inst[:ip]
+  instances.each do |name, opts|
+    config.vm.define name do |vm|
+      vm.vm.box = opts['box']
+      vm.vm.network "private_network", ip: opts['ip']
 
       vm.vm.provision "shell" do |s|
         s.inline = <<-SHELL
@@ -21,8 +20,8 @@ Vagrant.configure("2") do |config|
 
       vm.vm.provider "virtualbox" do |vb|
         vb.gui = false
-        vb.memory = inst[:memory]
-        vb.cpus = inst[:cpus]
+        vb.memory = opts['memory']
+        vb.cpus = opts['cpus']
       end
     end
   end

@@ -1,5 +1,14 @@
 version: '3'
 
+vars:
+  INSTANCES_YAML:
+    sh: cat testing/instances.yaml
+  INSTANCES:
+    ref: fromYaml .INSTANCES_YAML
+  INSTANCES_NAMES:
+    sh: yq '.instances | keys | .[]' testing/instances.yaml
+  SSHIPTS: '-i ~/.ssh/vagrant_ecdsa'
+
 tasks:
   build-builder:
     desc: Build the Docker image
@@ -28,90 +37,60 @@ tasks:
     deps:
       - build-builder
 
-  v-up:
-    desc: Up vagrant vm
-    dir: './testing/'
-    cmd: vagrant up ubuntu
+  v-up:*:
+    desc: 'Up {{index .MATCH 0}} vagrant vm'
+    dir: './testing'
+    cmd: 'vagrant up {{index .MATCH 0}}'
 
-  v-centos-up:
-    desc: Up centos vagrant vm
-    dir: './testing/'
-    cmd: vagrant up centos
+  v-destroy:*:
+    desc: 'Destroy {{index .MATCH 0}} vagrant vm'
+    dir: './testing'
+    cmd: 'vagrant destroy -f {{index .MATCH 0}}'
 
-  v-deploy:
-    desc: Deploy miniminion binary and config to Ubuntu VM
+  v-ssh:*:
+    desc: 'Login into {{index .MATCH 0}} vagrant vm'
+    vars:
+      VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
+    cmd: 'ssh root@{{.VM_IP}} {{.SSHIPTS}}'
+
+  v-deploy:*:
+    desc: 'Deploy miniminion to {{index .MATCH 0}} VM'
+    vars:
+      VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
     cmds:
-      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./zig-out/bin/miniminion root@192.168.56.2:/root/
-      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./minim.jsonnet root@192.168.56.2:/root/
-      - task: v-examples-copy
+      - 'rsync -avz -e "ssh {{.SSHIPTS}}" ./zig-out/bin/miniminion root@{{.VM_IP}}:/root/'
+      - 'rsync -avz -e "ssh {{.SSHIPTS}}" ./minim.jsonnet root@{{.VM_IP}}:/root/'
     failfast: true
     deps:
       - build
 
-  v-centos-deploy:
-    desc: Deploy miniminion binary and config to CentOS VM
-    cmds:
-      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./zig-out/bin/miniminion root@192.168.56.3:/root/
-      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./minim.jsonnet root@192.168.56.3:/root/
-      - task: v-examples-copy
-    failfast: true
-    deps:
-      - build
-
-  v-examples-copy:
-    desc: Copy examples directory to Vagrant VM
-    cmds:
-      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./examples/ root@192.168.56.2:/root/examples/
-      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./examples/ root@192.168.56.3:/root/examples/
-
-  v-redeploy:
-    desc: Recreate ubuntu vm and deploy files
+  v-redeploy:*:
+    desc: 'Recreate {{index .MATCH 0}} vm and deploy files'
     dir: './testing'
     cmds:
-      - task: v-destroy
-      - task: v-up
-      - task: v-deploy
+      - task: v-destroy:{{index .MATCH 0}}
+      - task: v-up:{{index .MATCH 0}}
+      - task: v-deploy:{{index .MATCH 0}}
 
-  v-centos-redeploy:
-    desc: Recreate centos vm and deploy files
-    dir: './testing'
+  v-run:*:
+    desc: 'Run minim on {{index .MATCH 0}} vagrant vm'
+    vars:
+      VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
     cmds:
-      - task: v-centos-destroy
-      - task: v-centos-up
-      - task: v-centos-deploy
-
-  v-ssh:
-    desc: Login into ubuntu vagrant vm
-    cmd: ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa
-
-  v-centos-ssh:
-    desc: Login into centos vagrant vm
-    cmd: ssh root@192.168.56.3 -i ~/.ssh/vagrant_ecdsa
-
-  v-run:
-    desc: Run minim from ubuntu vagrant vm
-    cmds:
-      - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- rm -rf /sys/fs/bpf/*"
-      - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- /root/miniminion"
-
-  v-centos-run:
-    desc: Run minim from centos vagrant vm
-    cmd: "ssh root@192.168.56.3 -i ~/.ssh/vagrant_ecdsa -- /root/miniminion"
+      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- rm -rf /sys/fs/bpf/* 2>/dev/null; true'
+      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- /root/miniminion'
 
   v-run-trace:
-    desc: Run minim from vagrant vm with bpf tracelog
+    desc: Run minim from ubuntu vagrant vm with bpf tracelog
+    vars:
+      VM_IP: '{{index .INSTANCES.instances "ubuntu" "ip"}}'
     cmds:
-      - task: v-run
-      - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- killall bpftool || true"
-      - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- bpftool prog tracelog"
+      - task: v-run:ubuntu
+      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- killall bpftool || true'
+      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- bpftool prog tracelog'
 
-  v-destroy:
-    desc: Destroy ubuntu vagrant vm
-    dir: './testing/'
-    cmd: vagrant destroy -f ubuntu
-
-  v-centos-destroy:
-    desc: Destroy centos vagrant vm
-    dir: './testing/'
-    cmd: vagrant destroy -f centos
-
+  v-examples-copy:
+    desc: Copy examples directory to all Vagrant VMs
+    cmds:
+      - for: { var: INSTANCES_NAMES, parallel: true }
+        cmd: 'rsync -avz -e "ssh {{$.SSHIPTS}}" ./examples/ root@{{index $.INSTANCES.instances .ITEM "ip"}}:/root/examples/'
