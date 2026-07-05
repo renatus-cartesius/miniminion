@@ -1,23 +1,29 @@
 Vagrant.configure("2") do |config|
-  config.vm.box = "bento/ubuntu-24.04"
-  config.vm.box_version = "202510.26.0"
-
   config.ssh.insert_key = false
+  ssh_pub_key = File.readlines("#{Dir.home}/.ssh/vagrant_ecdsa.pub").first.strip
 
-  config.vm.network "private_network", ip: "192.168.56.2"
+  instances = [
+    { name: "ubuntu", box: "bento/ubuntu-24.04",  ip: "192.168.56.2", memory: "3072", cpus: 2 },
+    { name: "centos", box: "bento/centos-stream-9", ip: "192.168.56.3", memory: "1024", cpus: 1 },
+  ]
 
-  config.vm.provision "shell" do |s|
-    ssh_pub_key = File.readlines("#{Dir.home}/.ssh/vagrant_ecdsa.pub").first.strip
-    s.inline = <<-SHELL
-      echo #{ssh_pub_key} >> /home/vagrant/.ssh/authorized_keys
-      echo #{ssh_pub_key} >> /root/.ssh/authorized_keys
-    SHELL
+  instances.each do |inst|
+    config.vm.define inst[:name] do |vm|
+      vm.vm.box = inst[:box]
+      vm.vm.network "private_network", ip: inst[:ip]
+
+      vm.vm.provision "shell" do |s|
+        s.inline = <<-SHELL
+          echo #{ssh_pub_key} >> /home/vagrant/.ssh/authorized_keys
+          echo #{ssh_pub_key} >> /root/.ssh/authorized_keys
+        SHELL
+      end
+
+      vm.vm.provider "virtualbox" do |vb|
+        vb.gui = false
+        vb.memory = inst[:memory]
+        vb.cpus = inst[:cpus]
+      end
+    end
   end
-
-  config.vm.provider "virtualbox" do |vb|
-    vb.gui = false
-    vb.memory = "3072"
-    vb.cpus = 2
-  end
-
 end

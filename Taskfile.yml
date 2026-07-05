@@ -9,7 +9,7 @@ tasks:
       - docker build --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t miniminion-builder .
 
   build:
-    desc: Build the miniminion project inside Zig container
+    desc: Build the miniminion project
     cmds:
       - docker run --rm -v .:/workspace -w /workspace miniminion-builder zig build -Doptimize=Debug --summary all
     sources:
@@ -21,47 +21,82 @@ tasks:
     deps:
       - build-builder
 
+  test:
+    desc: Run all tests
+    cmds:
+      - docker run --rm -v .:/workspace -w /workspace miniminion-builder zig test src/resource.zig -lc -static --name all-tests
+    deps:
+      - build-builder
+
   v-up:
     desc: Up vagrant vm
     dir: './testing/'
-    cmd: vagrant up
+    cmd: vagrant up ubuntu
+
+  v-centos-up:
+    desc: Up centos vagrant vm
+    dir: './testing/'
+    cmd: vagrant up centos
 
   v-deploy:
-    desc: Deploy miniminion binary and config to Vagrant VM
+    desc: Deploy miniminion binary and config to Ubuntu VM
     cmds:
       - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./zig-out/bin/miniminion root@192.168.56.2:/root/
       - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./minim.jsonnet root@192.168.56.2:/root/
       - task: v-examples-copy
-      # - task: v-run
     failfast: true
     deps:
       - build
-      # - v-up
+
+  v-centos-deploy:
+    desc: Deploy miniminion binary and config to CentOS VM
+    cmds:
+      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./zig-out/bin/miniminion root@192.168.56.3:/root/
+      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./minim.jsonnet root@192.168.56.3:/root/
+      - task: v-examples-copy
+    failfast: true
+    deps:
+      - build
 
   v-examples-copy:
     desc: Copy examples directory to Vagrant VM
     cmds:
       - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./examples/ root@192.168.56.2:/root/examples/
-  
+      - rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./examples/ root@192.168.56.3:/root/examples/
+
   v-redeploy:
-    desc: Recreate vm and deploy files
+    desc: Recreate ubuntu vm and deploy files
     dir: './testing'
     cmds:
       - task: v-destroy
       - task: v-up
       - task: v-deploy
 
+  v-centos-redeploy:
+    desc: Recreate centos vm and deploy files
+    dir: './testing'
+    cmds:
+      - task: v-centos-destroy
+      - task: v-centos-up
+      - task: v-centos-deploy
+
   v-ssh:
-    desc: Login into vagrant vm
+    desc: Login into ubuntu vagrant vm
     cmd: ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa
-    # deps:
-    #   - v-up
+
+  v-centos-ssh:
+    desc: Login into centos vagrant vm
+    cmd: ssh root@192.168.56.3 -i ~/.ssh/vagrant_ecdsa
 
   v-run:
-    desc: Run minim from vagrant vm
+    desc: Run minim from ubuntu vagrant vm
     cmds:
       - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- rm -rf /sys/fs/bpf/*"
       - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- /root/miniminion"
+
+  v-centos-run:
+    desc: Run minim from centos vagrant vm
+    cmd: "ssh root@192.168.56.3 -i ~/.ssh/vagrant_ecdsa -- /root/miniminion"
 
   v-run-trace:
     desc: Run minim from vagrant vm with bpf tracelog
@@ -71,7 +106,12 @@ tasks:
       - "ssh root@192.168.56.2 -i ~/.ssh/vagrant_ecdsa -- bpftool prog tracelog"
 
   v-destroy:
-    desg: Destroy vagrant vm
+    desc: Destroy ubuntu vagrant vm
     dir: './testing/'
-    cmd: vagrant destroy -f
+    cmd: vagrant destroy -f ubuntu
+
+  v-centos-destroy:
+    desc: Destroy centos vagrant vm
+    dir: './testing/'
+    cmd: vagrant destroy -f centos
 

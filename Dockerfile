@@ -1,24 +1,19 @@
-FROM ubuntu:24.04
+FROM alpine:3.21
 
 ARG UID=1000
 ARG GID=1000
 
-RUN if getent passwd ${UID}; then userdel -f -r $(getent passwd ${UID} | cut -d: -f1); fi && \
-    if getent group ${GID}; then groupdel $(getent group ${GID} | cut -d: -f1); fi
-
-RUN apt-get update && apt-get install -y \
+RUN apk add --no-cache \
     curl \
-    xz-utils \
+    xz \
     git \
     g++ \
     clang \
     llvm \
-    libbpf-dev \
     make \
     cmake \
-    libc++-dev \
-    libc++abi-dev \
-    && rm -rf /var/lib/apt/lists/*
+    linux-headers \
+    libbpf-dev
 
 RUN mkdir -p /opt && \
     curl -L https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /opt/zig.tar.xz && \
@@ -37,12 +32,11 @@ RUN git clone --depth=1 https://github.com/google/jsonnet.git /opt/jsonnet && \
     cp /opt/jsonnet/include/libjsonnet.h /opt/jsonnet-dist/include/ && \
     cp /opt/jsonnet/include/libjsonnet++.h /opt/jsonnet-dist/include/ && \
     cp $(g++ --print-file-name=libstdc++.a) /opt/jsonnet-dist/lib/ && \
-    cp $(g++ --print-file-name=libgcc_eh.a) /opt/jsonnet-dist/lib/ || true
+    cp $(g++ --print-file-name=libgcc_eh.a) /opt/jsonnet-dist/lib/
 
-RUN groupadd -g ${GID} developer && \
-    useradd -m -u ${UID} -g ${GID} -s /bin/bash developer
+RUN addgroup -g ${GID} developer && \
+    adduser -u ${UID} -G developer -s /bin/bash -D developer
 
 ENV PATH=/opt/zig:$PATH
 
 USER developer
-
