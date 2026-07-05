@@ -15,7 +15,7 @@ pub fn create(name: []const u8, version: ?[]const u8) Self {
 pub fn init(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
     self.allocator = allocator;
     self.io = io;
-    self.mgr = package.Manager.init(allocator);
+    self.mgr = try package.Manager.init(allocator, io);
 }
 
 pub fn apply(self: *Self) !bool {
