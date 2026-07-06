@@ -5,8 +5,10 @@ vars:
     sh: cat testing/instances.yaml
   INSTANCES:
     ref: fromYaml .INSTANCES_YAML
+  INSTANCES_NAMES_JSON:
+    sh: yq -o=json '.instances | keys' testing/instances.yaml
   INSTANCES_NAMES:
-    sh: yq '.instances | keys | .[]' testing/instances.yaml
+    ref: fromYaml .INSTANCES_NAMES_JSON
   SSHIPTS: '-i ~/.ssh/vagrant_ecdsa'
 
 tasks:
@@ -37,15 +39,34 @@ tasks:
     deps:
       - build-builder
 
+  v-status:
+    desc: 'Get status for vagrant instances'
+    dir: './testing'
+    cmd: 'vagrant status'
+
   v-up:*:
+    vars:
+      T: "{{ index .MATCH 0 }}"
+      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
     desc: 'Up {{index .MATCH 0}} vagrant vm'
     dir: './testing'
-    cmd: 'vagrant up {{index .MATCH 0}}'
+    cmd: |
+      {{range $index, $element := .TARGETS | fromJson}}
+      vagrant up {{ $element }} &
+      {{end}}
+      wait
 
   v-destroy:*:
+    vars:
+      T: "{{ index .MATCH 0 }}"
+      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
     desc: 'Destroy {{index .MATCH 0}} vagrant vm'
     dir: './testing'
-    cmd: 'vagrant destroy -f {{index .MATCH 0}}'
+    cmd: |
+      {{range $index, $element := .TARGETS | fromJson}}
+      vagrant destroy -f {{ $element }} &
+      {{end}}
+      wait
 
   v-ssh:*:
     desc: 'Login into {{index .MATCH 0}} vagrant vm'
@@ -54,43 +75,71 @@ tasks:
     cmd: 'ssh root@{{.VM_IP}} {{.SSHIPTS}}'
 
   v-deploy:*:
-    desc: 'Deploy miniminion to {{index .MATCH 0}} VM'
     vars:
-      VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
+      T: "{{ index .MATCH 0 }}"
+      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
+    desc: 'Deploy miniminion to {{index .MATCH 0}} VM'
     cmds:
-      - 'rsync -avz -e "ssh {{.SSHIPTS}}" ./zig-out/bin/miniminion root@{{.VM_IP}}:/root/'
-      - 'rsync -avz -e "ssh {{.SSHIPTS}}" ./minim.jsonnet root@{{.VM_IP}}:/root/'
+      - cmd: |
+          {{range $index, $element := .TARGETS | fromJson}}
+          rsync -avz -e "ssh {{$.SSHIPTS}}" ./zig-out/bin/miniminion root@{{index $.INSTANCES.instances $element "ip"}}:/root/ &
+          rsync -avz -e "ssh {{$.SSHIPTS}}" ./minim.jsonnet root@{{index $.INSTANCES.instances $element "ip"}}:/root/ &
+          {{end}}
+          wait
     failfast: true
     deps:
       - build
 
   v-redeploy:*:
-    desc: 'Recreate {{index .MATCH 0}} vm and deploy files'
+    vars:
+      T: "{{ index .MATCH 0 }}"
+    desc: 'Recreate {{index .MATCH 0}} and deploy files'
     dir: './testing'
     cmds:
-      - task: v-destroy:{{index .MATCH 0}}
-      - task: v-up:{{index .MATCH 0}}
-      - task: v-deploy:{{index .MATCH 0}}
+      - task: "v-destroy:{{ .T }}"
+      - task: "v-up:{{ .T }}"
+      - task: "v-deploy:{{ .T }}"
+          # {{range $index, $element := .TARGETS | fromJson}}
+          # vagrant destroy -f {{ $element }} && vagrant up {{ $element }} && \
+          # rsync -avz -e "ssh {{$.SSHIPTS}}" ../zig-out/bin/miniminion root@{{index $.INSTANCES.instances $element "ip"}}:/root/ && \
+          # rsync -avz -e "ssh {{$.SSHIPTS}}" ../minim.jsonnet root@{{index $.INSTANCES.instances $element "ip"}}:/root/
+          # {{end}}
+          # wait
+    deps:
+      - build
 
   v-run:*:
+    vars:
+      T: "{{ index .MATCH 0 }}"
+      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
     desc: 'Run minim on {{index .MATCH 0}} vagrant vm'
-    vars:
-      VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
     cmds:
-      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- rm -rf /sys/fs/bpf/* 2>/dev/null; true'
-      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- /root/miniminion'
+      - cmd: |
+          {{range $index, $element := .TARGETS | fromJson}}
+          ssh root@{{index $.INSTANCES.instances $element "ip"}} {{$.SSHIPTS}} -- rm -rf /sys/fs/bpf/* 2>/dev/null; true &
+          {{end}}
+          wait
+      - cmd: |
+          {{range $index, $element := .TARGETS | fromJson}}
+          ssh root@{{index $.INSTANCES.instances $element "ip"}} {{$.SSHIPTS}} -- /root/miniminion &
+          {{end}}
+          wait
 
-  v-run-trace:
-    desc: Run minim from ubuntu vagrant vm with bpf tracelog
-    vars:
-      VM_IP: '{{index .INSTANCES.instances "ubuntu" "ip"}}'
-    cmds:
-      - task: v-run:ubuntu
-      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- killall bpftool || true'
-      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- bpftool prog tracelog'
+  # v-run-trace:
+  #   desc: Run minim from ubuntu vagrant vm with bpf tracelog
+  #   vars:
+  #     VM_IP: '{{index .INSTANCES.instances "ubuntu" "ip"}}'
+  #   cmds:
+  #     - task: v-run:ubuntu
+  #     - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- killall bpftool || true'
+  #     - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- bpftool prog tracelog'
 
   v-examples-copy:
     desc: Copy examples directory to all Vagrant VMs
-    cmds:
-      - for: { var: INSTANCES_NAMES, parallel: true }
-        cmd: 'rsync -avz -e "ssh {{$.SSHIPTS}}" ./examples/ root@{{index $.INSTANCES.instances .ITEM "ip"}}:/root/examples/'
+    vars:
+      TARGETS: '{{.INSTANCES_NAMES | toJson}}'
+    cmd: |
+      {{range $index, $element := .TARGETS | fromJson}}
+      rsync -avz -e "ssh {{$.SSHIPTS}}" ./examples/ root@{{index $.INSTANCES.instances $element "ip"}}:/root/examples/ &
+      {{end}}
+      wait
