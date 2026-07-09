@@ -49,7 +49,7 @@ pub fn apply(self: *Self) !bool {
             allocator.free(res.stderr);
         }
         if (res.term == .exited and res.term.exited == 0) {
-            if (std.mem.eql(u8, std.mem.trim(u8, res.stdout, " \n\r"), "install ok installed")) {
+            if (std.mem.indexOf(u8, std.mem.trim(u8, res.stdout, " \n\r"), "ok installed") != null) {
                 return false;
             }
         }

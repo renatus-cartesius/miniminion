@@ -24,10 +24,10 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
 
 // ---------- Phase 1: System preconditions ----------
 (if swap_on != '0' then {
-  disable_swap: Resource('shell', {
-    command: 'swapoff -a && sed -i "/ swap /d" /etc/fstab',
-  }),
-} else {})
+   disable_swap: Resource('shell', {
+     command: 'swapoff -a && sed -i "/ swap /d" /etc/fstab',
+   }),
+ } else {})
 
 +
 
@@ -50,10 +50,10 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
 
 // ---------- Phase 3: Containerd ----------
 (if is_centos then {
-  docker_repo: Resource('shell', {
-    command: 'yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo || true',
-  }),
-} else {})
+   docker_repo: Resource('shell', {
+     command: 'yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo || true',
+   }),
+ } else {})
 
 +
 
@@ -80,54 +80,54 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
 
 // ---------- Phase 4: k8s repo + tools ----------
 (if is_ubuntu && k8s_apt_repo_added != 'yes' then {
-  k8s_repo: Resource('apt_repo', {
-    key_url: 'https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key',
-    key_path: '/etc/apt/keyrings/k8s.asc',
-    source: 'deb [signed-by=/etc/apt/keyrings/k8s.asc] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /',
-    source_path: '/etc/apt/sources.list.d/k8s.list',
-  }, deps=['containerd_service']),
-} else {})
+   k8s_repo: Resource('apt_repo', {
+     key_url: 'https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key',
+     key_path: '/etc/apt/keyrings/k8s.asc',
+     source: 'deb [signed-by=/etc/apt/keyrings/k8s.asc] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /',
+     source_path: '/etc/apt/sources.list.d/k8s.list',
+   }, deps=['containerd_service']),
+ } else {})
 
 +
 
 (if is_centos && k8s_rpm_repo_added != 'yes' then {
-  k8s_repo: Resource('shell', {
-    command: 'printf "[kubernetes]\nname=Kubernetes\nbaseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/\nenabled=1\ngpgcheck=1\ngpgkey=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/repodata/repomd.xml.key\n" > /etc/yum.repos.d/kubernetes.repo',
-  }, deps=['containerd_service']),
-} else {})
+   k8s_repo: Resource('shell', {
+     command: 'printf "[kubernetes]\nname=Kubernetes\nbaseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/\nenabled=1\ngpgcheck=1\ngpgkey=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/repodata/repomd.xml.key\n" > /etc/yum.repos.d/kubernetes.repo',
+   }, deps=['containerd_service']),
+ } else {})
 
 +
 
 {
-  kubeadm: Resource(pkg_type, {name: 'kubeadm'}, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
-  kubelet: Resource(pkg_type, {name: 'kubelet'}, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
-  kubectl: Resource(pkg_type, {name: 'kubectl'}, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
+  kubeadm: Resource(pkg_type, { name: 'kubeadm' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
+  kubelet: Resource(pkg_type, { name: 'kubelet' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
+  kubectl: Resource(pkg_type, { name: 'kubectl' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
 }
 
 +
 
 // ---------- Phase 5: Hold k8s packages ----------
 (if is_ubuntu then {
-  hold_k8s_pkgs: Resource('shell', {
-    command: 'apt-mark hold kubeadm kubelet kubectl',
-  }, deps=['kubeadm', 'kubelet', 'kubectl']),
-} else {})
+   hold_k8s_pkgs: Resource('shell', {
+     command: 'apt-mark hold kubeadm kubelet kubectl',
+   }, deps=['kubeadm', 'kubelet', 'kubectl']),
+ } else {})
 
 +
 
 // ---------- Phase 6: kubeadm init ----------
 (if cluster_init != 'yes' then {
-  kubeadm_init: Resource('shell', {
-    command: 'kubeadm init --pod-network-cidr=10.244.0.0/16 --skip-phases=addon/kube-proxy --apiserver-advertise-address=' + api_server_ip + ' --ignore-preflight-errors=NumCPU,Mem,CRI',
-  }, deps=['containerd_service', 'sysctl_setup'] + (if swap_on != '0' then ['disable_swap'] else []) + (if is_ubuntu then ['hold_k8s_pkgs'] else ['kubeadm', 'kubelet', 'kubectl'])),
-} else {})
+   kubeadm_init: Resource('shell', {
+     command: 'kubeadm init --pod-network-cidr=10.244.0.0/16 --skip-phases=addon/kube-proxy --apiserver-advertise-address=' + api_server_ip + ' --ignore-preflight-errors=NumCPU,Mem,CRI',
+   }, deps=['containerd_service', 'sysctl_setup'] + (if swap_on != '0' then ['disable_swap'] else []) + (if is_ubuntu then ['hold_k8s_pkgs'] else ['kubeadm', 'kubelet', 'kubectl'])),
+ } else {})
 
 +
 
 // ---------- Phase 7: Post-init ----------
 {
   kubeconfig: Resource('shell', {
-    command: 'mkdir -p /root/.kube && cp -i /etc/kubernetes/admin.conf /root/.kube/config 2>/dev/null; chown root:root /root/.kube/config 2>/dev/null',
+    command: 'mkdir -p /root/.kube && cp -i /etc/kubernetes/admin.conf /root/.kube/config 2>/dev/null; chown root:root /root/.kube/config 2>/dev/null && sleep 20',
   }, deps=(if cluster_init != 'yes' then ['kubeadm_init'] else [])),
 
   flannel_cni: Resource('shell', {

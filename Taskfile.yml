@@ -84,6 +84,7 @@ tasks:
           {{range $index, $element := .TARGETS | fromJson}}
           rsync -avz -e "ssh {{$.SSHIPTS}}" ./zig-out/bin/miniminion root@{{index $.INSTANCES.instances $element "ip"}}:/root/ &
           rsync -avz -e "ssh {{$.SSHIPTS}}" ./minim.jsonnet root@{{index $.INSTANCES.instances $element "ip"}}:/root/ &
+          rsync -avz -e "ssh {{$.SSHIPTS}}" ./examples/ root@{{index $.INSTANCES.instances $element "ip"}}:/root/examples/ &
           {{end}}
           wait
     failfast: true
@@ -99,6 +100,7 @@ tasks:
       - task: "v-destroy:{{ .T }}"
       - task: "v-up:{{ .T }}"
       - task: "v-deploy:{{ .T }}"
+      - task: "v-run:{{ .T }}"
           # {{range $index, $element := .TARGETS | fromJson}}
           # vagrant destroy -f {{ $element }} && vagrant up {{ $element }} && \
           # rsync -avz -e "ssh {{$.SSHIPTS}}" ../zig-out/bin/miniminion root@{{index $.INSTANCES.instances $element "ip"}}:/root/ && \
