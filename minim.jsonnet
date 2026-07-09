@@ -27,7 +27,7 @@ local apt_updated = shellExec('[ -f /root/apt-updated ] && echo -n updated || tr
 // Other part of state
 {
   common_deps: Resource(
-    'package',
+    'apt_pkg',
     {
       name: 'apt-transport-https',
     },
@@ -35,7 +35,7 @@ local apt_updated = shellExec('[ -f /root/apt-updated ] && echo -n updated || tr
   ),
 
   docker_pkg: Resource(
-    'package',
+    'apt_pkg',
     // { name: 'docker.io', version: '29.1.3-0ubuntu3~24.04.1' },
     { name: 'docker.io' },
     deps=['common_deps']
@@ -51,7 +51,7 @@ local apt_updated = shellExec('[ -f /root/apt-updated ] && echo -n updated || tr
   ),
 
   docker_compose: Resource(
-    'package',
+    'apt_pkg',
     { name: 'docker-compose-v2' },
     deps=['docker_config', 'docker_pkg']
   ),

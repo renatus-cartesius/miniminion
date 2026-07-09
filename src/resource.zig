@@ -2,15 +2,29 @@ const std = @import("std");
 const dag = @import("dag.zig");
 
 const File = @import("resources/file.zig");
-const Package = @import("resources/package.zig");
 const Shell = @import("resources/shell.zig");
+const AptPkg = @import("resources/apt_pkg.zig");
+const DnfPkg = @import("resources/dnf_pkg.zig");
+const PacmanPkg = @import("resources/pacman_pkg.zig");
+const ApkPkg = @import("resources/apk_pkg.zig");
+const Service = @import("resources/service.zig");
+const AptRepo = @import("resources/apt_repo.zig");
+const Sysctl = @import("resources/sysctl.zig");
+const KernelModule = @import("resources/kernel_module.zig");
 
-pub const ResourceErrors = error{ MissingType, NotFoundResource, IoNotInitialized, AllocatorNotInitialized };
+pub const ResourceErrors = error{ MissingType, NotFoundResource, UnknownResourceType, IoNotInitialized, AllocatorNotInitialized, MissingField };
 
 pub const ResourceData = union(enum) {
     file: File,
-    package: Package,
     shell: Shell,
+    apt_pkg: AptPkg,
+    dnf_pkg: DnfPkg,
+    pacman_pkg: PacmanPkg,
+    apk_pkg: ApkPkg,
+    service: Service,
+    apt_repo: AptRepo,
+    sysctl: Sysctl,
+    kernel_module: KernelModule,
 
     pub fn typeName(self: ResourceData) []const u8 {
         return @tagName(self);
@@ -40,10 +54,35 @@ pub const State = struct {
     rmap: std.StringHashMap(usize),
 };
 
+fn parseResource(allocator: std.mem.Allocator, resource_name: []const u8, resource_data: std.json.Value, deps: []const []const u8) !Resource {
+    const type_field = resource_data.object.get("type") orelse return error.MissingType;
+    const type_name = type_field.string;
+
+    const type_registry = comptime blk: {
+        const info = @typeInfo(ResourceData);
+        const union_info = info.@"union";
+        var result: [union_info.fields.len]struct { name: []const u8, Type: type } = undefined;
+        for (&result, union_info.fields) |*r, field| {
+            r.* = .{ .name = field.name, .Type = field.type };
+        }
+        break :blk result;
+    };
+
+    inline for (type_registry) |entry| {
+        if (std.mem.eql(u8, type_name, entry.name)) {
+            return Resource{
+                .name = resource_name,
+                .data = @unionInit(ResourceData, entry.name, try entry.Type.parseJson(allocator, resource_data)),
+                .deps = deps,
+            };
+        }
+    }
+    return error.UnknownResourceType;
+}
+
 pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resource {
     const allocator = arena.allocator();
 
-    // Use std.json with more careful error handling
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
     defer parsed.deinit();
 
@@ -55,11 +94,6 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
         const resource_name = entry.key_ptr.*;
         const resource_data = entry.value_ptr.*;
 
-        // Simple parsing without complex comptime operations
-        const type_field = resource_data.object.get("type") orelse return error.MissingType;
-        const type_name = type_field.string;
-
-        // Parse deps
         var deps_array = try std.ArrayList([]const u8).initCapacity(allocator, 0);
         defer deps_array.deinit(allocator);
 
@@ -74,38 +108,7 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
         }
         const deps = try deps_array.toOwnedSlice(allocator);
 
-        // Parse resource based on type
-        if (std.mem.eql(u8, type_name, "file")) {
-            const path_field = resource_data.object.get("path") orelse continue;
-            const content_field = resource_data.object.get("content") orelse continue;
-            const mode_field = resource_data.object.get("mode") orelse std.json.Value{ .integer = 0o755 };
-
-            const file_resource = Resource{
-                .name = resource_name,
-                .data = ResourceData{ .file = File.create(path_field.string, content_field.string, @intCast(mode_field.integer)) },
-                .deps = deps,
-            };
-            try resources.append(allocator, file_resource);
-        } else if (std.mem.eql(u8, type_name, "package")) {
-            const name_field = resource_data.object.get("name") orelse continue;
-            const version_field = resource_data.object.get("version");
-
-            const package_resource = Resource{
-                .name = resource_name,
-                .data = ResourceData{ .package = Package.create(name_field.string, if (version_field) |v| v.string else null) },
-                .deps = deps,
-            };
-            try resources.append(allocator, package_resource);
-        } else if (std.mem.eql(u8, type_name, "shell")) {
-            const command_field = resource_data.object.get("command") orelse continue;
-
-            const shell_resource = Resource{
-                .name = resource_name,
-                .data = ResourceData{ .shell = Shell.create(command_field.string) },
-                .deps = deps,
-            };
-            try resources.append(allocator, shell_resource);
-        }
+        try resources.append(allocator, try parseResource(allocator, resource_name, resource_data, deps));
     }
 
     return resources.toOwnedSlice(allocator);
@@ -136,7 +139,7 @@ test "Resource: simple state execution" {
         \\    "deps": ["compiler"]
         \\  },
         \\  "compiler": {
-        \\    "type": "package",
+        \\    "type": "apt_pkg",
         \\    "name": "zig",
         \\    "version": "0.16"
         \\  }

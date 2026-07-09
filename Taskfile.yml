@@ -121,7 +121,7 @@ tasks:
           wait
       - cmd: |
           {{range $index, $element := .TARGETS | fromJson}}
-          ssh root@{{index $.INSTANCES.instances $element "ip"}} {{$.SSHIPTS}} -- /root/miniminion &
+          ssh root@{{index $.INSTANCES.instances $element "ip"}} {{$.SSHIPTS}} --  /root/miniminion /root/examples/kubernetes_master.jsonnet &
           {{end}}
           wait
 

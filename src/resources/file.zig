@@ -1,6 +1,8 @@
 const std = @import("std");
 const Self = @This();
 
+pub const tag = "file";
+
 path: []const u8 = "",
 content: []const u8 = "",
 mode: u32 = 0o655,
@@ -9,6 +11,14 @@ allocator: ?std.mem.Allocator = null,
 
 pub fn create(path: []const u8, content: []const u8, mode: u32) Self {
     return Self{ .path = path, .content = content, .mode = mode };
+}
+
+pub fn parseJson(allocator: std.mem.Allocator, data: std.json.Value) !Self {
+    _ = allocator;
+    const path = data.object.get("path") orelse return error.MissingField;
+    const content = data.object.get("content") orelse return error.MissingField;
+    const mode = if (data.object.get("mode")) |m| m.integer else 0o755;
+    return Self.create(path.string, content.string, @intCast(mode));
 }
 
 pub fn init(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {

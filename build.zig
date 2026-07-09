@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const test_step = b.step("test", "Run all tests");
-    const test_files = [_][]const u8{ "src/modules/package.zig", "src/dag.zig", "src/resource.zig" };
+    const test_files = [_][]const u8{ "src/dag.zig", "src/resource.zig" };
     for (test_files, 0..) |file, i| {
         const test_exe = b.addTest(.{
             .name = b.fmt("test-{d}", .{i}),

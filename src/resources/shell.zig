@@ -2,12 +2,20 @@ const std = @import("std");
 const cmd = @import("../modules/utils/cmd.zig");
 const Self = @This();
 
+pub const tag = "shell";
+
 command: []const u8 = "",
 io: ?std.Io = null,
 allocator: ?std.mem.Allocator = null,
 
 pub fn create(command: []const u8) Self {
     return Self{ .command = command };
+}
+
+pub fn parseJson(allocator: std.mem.Allocator, data: std.json.Value) !Self {
+    _ = allocator;
+    const command = data.object.get("command") orelse return error.MissingField;
+    return Self.create(command.string);
 }
 
 pub fn init(self: *Self, io: std.Io, allocator: std.mem.Allocator) !void {
