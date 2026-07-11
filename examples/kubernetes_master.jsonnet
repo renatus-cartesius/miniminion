@@ -27,11 +27,16 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
    disable_swap: Resource('shell', {
      command: 'swapoff -a && sed -i "/ swap /d" /etc/fstab',
    }),
- } else {})
+ } else {}) +
 
-+
+// ---------- Phase 2: Package cache update ----------
+(if is_ubuntu then {
+  update_cache: Resource('apt_update', {}, deps=(if swap_on != '0' then ['disable_swap'] else [])),
+} else {
+  update_cache: Resource('dnf_update', {}, deps=(if swap_on != '0' then ['disable_swap'] else [])),
+}) +
 
-// ---------- Phase 2: Kernel modules + sysctl ----------
+// ---------- Phase 3: Kernel modules + sysctl ----------
 {
   kernel_modules: Resource('kernel_module', {
     modules: ['overlay', 'br_netfilter'],
@@ -48,7 +53,7 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
 
 +
 
-// ---------- Phase 3: Containerd ----------
+// ---------- Phase 4: Containerd ----------
 (if is_centos then {
    docker_repo: Resource('shell', {
      command: 'yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo || true',
@@ -60,7 +65,7 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
 {
   containerd: Resource(pkg_type, {
     name: if is_ubuntu then 'containerd' else 'containerd.io',
-  }, deps=(if is_centos then ['docker_repo'] else [])),
+  }, deps=(if is_centos then ['docker_repo'] else []) + ['update_cache']),
 
   containerd_config: Resource('shell', {
     command: if is_ubuntu then
@@ -86,6 +91,8 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
      source: 'deb [signed-by=/etc/apt/keyrings/k8s.asc] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /',
      source_path: '/etc/apt/sources.list.d/k8s.list',
    }, deps=['containerd_service']),
+
+   repo_update: Resource('apt_update', {}, deps=['k8s_repo']),
  } else {})
 
 +
@@ -94,14 +101,16 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
    k8s_repo: Resource('shell', {
      command: 'printf "[kubernetes]\nname=Kubernetes\nbaseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/\nenabled=1\ngpgcheck=1\ngpgkey=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/repodata/repomd.xml.key\n" > /etc/yum.repos.d/kubernetes.repo',
    }, deps=['containerd_service']),
+
+   repo_update: Resource('dnf_update', {}, deps=['k8s_repo']),
  } else {})
 
 +
 
 {
-  kubeadm: Resource(pkg_type, { name: 'kubeadm' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
-  kubelet: Resource(pkg_type, { name: 'kubelet' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
-  kubectl: Resource(pkg_type, { name: 'kubectl' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['k8s_repo'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['k8s_repo'] else [])),
+  kubeadm: Resource(pkg_type, { name: 'kubeadm' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
+  kubelet: Resource(pkg_type, { name: 'kubelet' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
+  kubectl: Resource(pkg_type, { name: 'kubectl' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
 }
 
 +

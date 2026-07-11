@@ -11,6 +11,10 @@ const Service = @import("resources/service.zig");
 const AptRepo = @import("resources/apt_repo.zig");
 const Sysctl = @import("resources/sysctl.zig");
 const KernelModule = @import("resources/kernel_module.zig");
+const AptUpdate = @import("resources/apt_update.zig");
+const DnfUpdate = @import("resources/dnf_update.zig");
+const PacmanUpdate = @import("resources/pacman_update.zig");
+const ApkUpdate = @import("resources/apk_update.zig");
 
 pub const ResourceErrors = error{ MissingType, NotFoundResource, UnknownResourceType, IoNotInitialized, AllocatorNotInitialized, MissingField };
 
@@ -25,6 +29,10 @@ pub const ResourceData = union(enum) {
     apt_repo: AptRepo,
     sysctl: Sysctl,
     kernel_module: KernelModule,
+    apt_update: AptUpdate,
+    dnf_update: DnfUpdate,
+    pacman_update: PacmanUpdate,
+    apk_update: ApkUpdate,
 
     pub fn typeName(self: ResourceData) []const u8 {
         return @tagName(self);

@@ -69,14 +69,5 @@ pub fn apply(self: *Self) !bool {
         }
     }
 
-    {
-        const argv = [_][]const u8{ "apt-get", "update" };
-        const res = try cmd.run(allocator, io, &argv);
-        defer {
-            allocator.free(res.stdout);
-            allocator.free(res.stderr);
-        }
-    }
-
     return true;
 }

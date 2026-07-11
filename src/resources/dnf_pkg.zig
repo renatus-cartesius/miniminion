@@ -71,6 +71,10 @@ pub fn apply(self: *Self) !bool {
         allocator.free(res.stderr);
     }
     if (res.term != .exited or res.term.exited != 0) {
+        const stderr_trimmed = std.mem.trim(u8, res.stderr, "\n");
+        if (stderr_trimmed.len > 0) {
+            std.debug.print("  stderr: {s}\n", .{stderr_trimmed});
+        }
         return error.PackageInstallFailed;
     }
     return true;
