@@ -1,31 +1,48 @@
 const std = @import("std");
 
+fn addJsonnet(module: *std.Build.Module) void {
+    module.addIncludePath(.{ .cwd_relative = "/opt/jsonnet-dist/include" });
+    module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libjsonnet.a" });
+    module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libstdc++.a" });
+    module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libgcc_eh.a" });
+}
+
+fn addBpf(module: *std.Build.Module) void {
+    module.addIncludePath(.{ .cwd_relative = "src/bpf" });
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable(.{ .name = "miniminion", .root_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
+    const agent = b.addExecutable(.{ .name = "minim-agent", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/agent_main.zig"),
         .target = target,
         .optimize = optimize,
     }) });
+    agent.linkage = .static;
+    agent.root_module.linkSystemLibrary("c", .{});
+    addJsonnet(agent.root_module);
+    addBpf(agent.root_module);
+    try buildBpfProgs(b, agent);
+    b.installArtifact(agent);
 
-    exe.root_module.addIncludePath(.{ .cwd_relative = "/opt/jsonnet-dist/include" });
-    exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libjsonnet.a" });
-    exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libstdc++.a" });
-    exe.root_module.addObjectFile(.{ .cwd_relative = "/opt/jsonnet-dist/lib/libgcc_eh.a" });
+    const controller = b.addExecutable(.{ .name = "minim-controller", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/controller_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    controller.linkage = .static;
+    controller.root_module.linkSystemLibrary("c", .{});
+    b.installArtifact(controller);
 
-    exe.root_module.linkSystemLibrary("c", .{});
-    exe.linkage = .static;
+    const run_agent = b.addRunArtifact(agent);
+    const run_step = b.step("run-agent", "Run minim-agent");
+    run_step.dependOn(&run_agent.step);
 
-    exe.root_module.addIncludePath(.{ .cwd_relative = "src/bpf" });
-    try buildBpfProgs(b, exe);
-
-    b.installArtifact(exe);
-
-    const run_cmd = b.addRunArtifact(exe);
-    const run_step = b.step("run", "Run miniminion binary");
-    run_step.dependOn(&run_cmd.step);
+    const run_controller = b.addRunArtifact(controller);
+    const run_ctrl_step = b.step("run-controller", "Run minim-controller (dummy)");
+    run_ctrl_step.dependOn(&run_controller.step);
 
     const test_step = b.step("test", "Run all tests");
     const test_files = [_][]const u8{ "src/dag.zig", "src/resource.zig" };
@@ -63,3 +80,4 @@ fn buildBpfProgs(b: *std.Build, exe: *std.Build.Step.Compile) !void {
         exe.step.dependOn(&clang.step);
     }
 }
+
