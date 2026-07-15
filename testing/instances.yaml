@@ -4,13 +4,27 @@ instances:
     ip: 192.168.56.2
     memory: "3072"
     cpus: 2
+    deploy:
+      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./zig-out/bin/minim-agent root@$IP:/root/'
+      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./minim.jsonnet root@$IP:/root/'
+      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./examples/ root@$IP:/root/examples/'
+    run: 'rm -rf /sys/fs/bpf/* 2>/dev/null; true; /root/minim-agent /root/examples/kubernetes_master.jsonnet'
   centos:
     box: bento/centos-stream-9
     ip: 192.168.56.3
     memory: "2048"
     cpus: 2
+    deploy:
+      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./zig-out/bin/minim-agent root@$IP:/root/'
+      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./minim.jsonnet root@$IP:/root/'
+      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./examples/ root@$IP:/root/examples/'
+    run: 'rm -rf /sys/fs/bpf/* 2>/dev/null; true; /root/minim-agent /root/examples/kubernetes_master.jsonnet'
   controller:
     box: bento/ubuntu-24.04
     ip: 192.168.56.10
     memory: "512"
     cpus: 1
+    deploy:
+      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./zig-out/bin/minim-controller root@$IP:/root/'
+      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa" ./examples/ root@$IP:/root/examples/'
+    run: 'pkill -f minim-controller 2>/dev/null; true; nohup /root/minim-controller /root/examples/kubernetes_master.jsonnet 9876 > /root/controller.log 2>&1 &'

@@ -79,13 +79,14 @@ tasks:
     vars:
       T: "{{ index .MATCH 0 }}"
       TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
-    desc: 'Deploy minim-agent to {{index .MATCH 0}} VM'
+    desc: 'Deploy to {{index .MATCH 0}} VM'
     cmds:
       - cmd: |
           {{range $index, $element := .TARGETS | fromJson}}
-          rsync -avz -e "ssh {{$.SSHIPTS}}" ./zig-out/bin/minim-agent root@{{index $.INSTANCES.instances $element "ip"}}:/root/ &
-          rsync -avz -e "ssh {{$.SSHIPTS}}" ./minim.jsonnet root@{{index $.INSTANCES.instances $element "ip"}}:/root/ &
-          rsync -avz -e "ssh {{$.SSHIPTS}}" ./examples/ root@{{index $.INSTANCES.instances $element "ip"}}:/root/examples/ &
+          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
+          {{range (index $.INSTANCES.instances $element "deploy")}}
+          {{.}} &
+          {{end}}
           {{end}}
           wait
     failfast: true
@@ -102,12 +103,6 @@ tasks:
       - task: "v-up:{{ .T }}"
       - task: "v-deploy:{{ .T }}"
       - task: "v-run:{{ .T }}"
-          # {{range $index, $element := .TARGETS | fromJson}}
-          # vagrant destroy -f {{ $element }} && vagrant up {{ $element }} && \
-          # rsync -avz -e "ssh {{$.SSHIPTS}}" ../zig-out/bin/minim-agent root@{{index $.INSTANCES.instances $element "ip"}}:/root/ && \
-          # rsync -avz -e "ssh {{$.SSHIPTS}}" ../minim.jsonnet root@{{index $.INSTANCES.instances $element "ip"}}:/root/
-          # {{end}}
-          # wait
     deps:
       - build
 
@@ -115,73 +110,11 @@ tasks:
     vars:
       T: "{{ index .MATCH 0 }}"
       TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
-    desc: 'Run minim-agent on {{index .MATCH 0}} vagrant vm'
+    desc: 'Run on {{index .MATCH 0}} VM'
     cmds:
       - cmd: |
           {{range $index, $element := .TARGETS | fromJson}}
-          ssh root@{{index $.INSTANCES.instances $element "ip"}} {{$.SSHIPTS}} -- rm -rf /sys/fs/bpf/* 2>/dev/null; true &
+          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
+          echo "{{index $.INSTANCES.instances $element "run"}}" | ssh root@$IP {{$.SSHIPTS}} &
           {{end}}
           wait
-      - cmd: |
-          {{range $index, $element := .TARGETS | fromJson}}
-          ssh root@{{index $.INSTANCES.instances $element "ip"}} {{$.SSHIPTS}} --  /root/minim-agent /root/examples/kubernetes_master.jsonnet &
-          {{end}}
-          wait
-
-  v-deploy-controller:
-    desc: Deploy minim-controller and examples to controller VM
-    cmds:
-      - cmd: |
-          rsync -avz -e "ssh {{$.SSHIPTS}}" ./zig-out/bin/minim-controller root@192.168.56.10:/root/ &
-          rsync -avz -e "ssh {{$.SSHIPTS}}" ./examples/ root@192.168.56.10:/root/examples/ &
-          wait
-    deps:
-      - build
-
-  v-deploy-all:
-    desc: Deploy controller and all agents
-    cmds:
-      - task: v-deploy-controller
-      - task: v-deploy:ubuntu
-      - task: v-deploy:centos
-
-  v-run-controller:
-    desc: Start minim-controller on controller VM
-    vars:
-      CTRL_SSH: 'ssh -o StrictHostKeyChecking=no -i ~/.ssh/vagrant_ecdsa root@192.168.56.10'
-    cmds:
-      - '{{.CTRL_SSH}} pkill -f minim-controller 2>/dev/null || true'
-      - '{{.CTRL_SSH}} "nohup /root/minim-controller /root/examples/kubernetes_master.jsonnet 9876 > /root/controller.log 2>&1 &"'
-      - sleep 1
-      - '{{.CTRL_SSH}} "ss -tlnp | grep 9876 || echo controller not running"'
-
-  v-run-from-controller:*:
-    desc: 'Run minim-agent on {{index .MATCH 0}} via controller'
-    vars:
-      VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
-    cmds:
-      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- rm -rf /sys/fs/bpf/* 2>/dev/null; true'
-      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- /root/minim-agent --controller 192.168.56.10:9876'
-
-  # v-run-trace:
-#   # desc: Run minim-agent from ubuntu vagrant vm with bpf tracelog
-  #   vars:
-  #     VM_IP: '{{index .INSTANCES.instances "ubuntu" "ip"}}'
-  #   cmds:
-  #     - task: v-run:ubuntu
-  #     - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- killall bpftool || true'
-  #     - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- bpftool prog tracelog'
-
-  run-controller:
-    desc: Run minim-controller locally (dummy)
-    cmd: ./zig-out/bin/minim-controller
-
-  v-examples-copy:
-    desc: Copy examples directory to all Vagrant VMs
-    vars:
-      TARGETS: '{{.INSTANCES_NAMES | toJson}}'
-    cmd: |
-      {{range $index, $element := .TARGETS | fromJson}}
-      rsync -avz -e "ssh {{$.SSHIPTS}}" ./examples/ root@{{index $.INSTANCES.instances $element "ip"}}:/root/examples/ &
-      {{end}}
-      wait
