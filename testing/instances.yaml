@@ -9,3 +9,8 @@ instances:
     ip: 192.168.56.3
     memory: "2048"
     cpus: 2
+  controller:
+    box: bento/ubuntu-24.04
+    ip: 192.168.56.10
+    memory: "512"
+    cpus: 1

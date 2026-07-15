@@ -128,6 +128,41 @@ tasks:
           {{end}}
           wait
 
+  v-deploy-controller:
+    desc: Deploy minim-controller and examples to controller VM
+    cmds:
+      - cmd: |
+          rsync -avz -e "ssh {{$.SSHIPTS}}" ./zig-out/bin/minim-controller root@192.168.56.10:/root/ &
+          rsync -avz -e "ssh {{$.SSHIPTS}}" ./examples/ root@192.168.56.10:/root/examples/ &
+          wait
+    deps:
+      - build
+
+  v-deploy-all:
+    desc: Deploy controller and all agents
+    cmds:
+      - task: v-deploy-controller
+      - task: v-deploy:ubuntu
+      - task: v-deploy:centos
+
+  v-run-controller:
+    desc: Start minim-controller on controller VM
+    vars:
+      CTRL_SSH: 'ssh -o StrictHostKeyChecking=no -i ~/.ssh/vagrant_ecdsa root@192.168.56.10'
+    cmds:
+      - '{{.CTRL_SSH}} pkill -f minim-controller 2>/dev/null || true'
+      - '{{.CTRL_SSH}} "nohup /root/minim-controller /root/examples/kubernetes_master.jsonnet 9876 > /root/controller.log 2>&1 &"'
+      - sleep 1
+      - '{{.CTRL_SSH}} "ss -tlnp | grep 9876 || echo controller not running"'
+
+  v-run-from-controller:*:
+    desc: 'Run minim-agent on {{index .MATCH 0}} via controller'
+    vars:
+      VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
+    cmds:
+      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- rm -rf /sys/fs/bpf/* 2>/dev/null; true'
+      - 'ssh root@{{.VM_IP}} {{.SSHIPTS}} -- /root/minim-agent --controller 192.168.56.10:9876'
+
   # v-run-trace:
 #   # desc: Run minim-agent from ubuntu vagrant vm with bpf tracelog
   #   vars:
