@@ -34,6 +34,7 @@ pub fn build(b: *std.Build) void {
     }) });
     controller.linkage = .static;
     controller.root_module.linkSystemLibrary("c", .{});
+    addJsonnet(controller.root_module);
     b.installArtifact(controller);
 
     const run_agent = b.addRunArtifact(agent);
