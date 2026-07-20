@@ -34,11 +34,18 @@ tasks:
       - build-builder
 
   test:
-    desc: Run all tests
+    desc: Run unit tests
     cmds:
       - docker run --rm -v .:/workspace -w /workspace miniminion-builder zig test src/resource.zig -lc -static --name all-tests
     deps:
       - build-builder
+
+  test-e2e:
+    desc: Run stack orchestration e2e tests
+    cmds:
+      - bash test/e2e_stack.sh
+    deps:
+      - build
 
   v-status:
     desc: 'Get status for vagrant instances'
@@ -92,6 +99,37 @@ tasks:
     failfast: true
     deps:
       - build
+
+  ctrl-up:
+    desc: 'Start etcd + controller stack orchestrator'
+    cmds:
+      - docker compose up -d etcd
+      - sleep 2
+      - './zig-out/bin/minim-controller k8s_stack.jsonnet 8080 127.0.0.1 2379 &'
+      - sleep 1
+      - echo 'Controller listening on :8080, etcd on :2379'
+    deps:
+      - build
+
+  ctrl-down:
+    desc: 'Stop controller + etcd'
+    cmds:
+      - 'pkill -f minim-controller 2>/dev/null; true'
+      - docker compose down
+    ignore_error: true
+
+  v-cluster:
+    desc: 'Bootstrap the full K8s cluster (masters then workers)'
+    cmds:
+      - task: v-redeploy:master-01
+      - task: v-redeploy:master-02
+      - task: v-redeploy:master-03
+      - task: v-redeploy:worker-01
+      - task: v-redeploy:worker-02
+      - task: v-redeploy:worker-03
+    deps:
+      - build
+      - ctrl-up
 
   v-redeploy:*:
     vars:
