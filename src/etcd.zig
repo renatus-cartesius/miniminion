@@ -27,31 +27,31 @@ fn b64decode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return buf;
 }
 
-pub fn put(self: *Self, allocator: std.mem.Allocator, key: []const u8, value: []const u8) !void {
+pub fn put(self: *Self, alloc: std.mem.Allocator, key: []const u8, value: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     const key_b64 = try b64encode(allocator, key);
-    defer allocator.free(key_b64);
     const val_b64 = try b64encode(allocator, value);
-    defer allocator.free(val_b64);
 
     const body = try std.fmt.allocPrint(allocator, "{{\"key\":\"{s}\",\"value\":\"{s}\"}}", .{ key_b64, val_b64 });
-    defer allocator.free(body);
 
-    const resp = try http.request(allocator, self.io, self.host, self.port, "POST", "/v3/kv/put", body);
-    defer allocator.free(resp);
+    _ = try http.request(allocator, self.io, self.host, self.port, "POST", "/v3/kv/put", body);
 }
 
-pub fn get(self: *Self, allocator: std.mem.Allocator, key: []const u8) !?[]const u8 {
+pub fn get(self: *Self, alloc: std.mem.Allocator, key: []const u8) !?[]const u8 {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     const key_b64 = try b64encode(allocator, key);
-    defer allocator.free(key_b64);
 
     const body = try std.fmt.allocPrint(allocator, "{{\"key\":\"{s}\"}}", .{key_b64});
-    defer allocator.free(body);
 
     const resp = try http.request(allocator, self.io, self.host, self.port, "POST", "/v3/kv/range", body);
-    defer allocator.free(resp);
 
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, resp, .{});
-    defer parsed.deinit();
 
     const kvs = parsed.value.object.get("kvs") orelse return null;
     if (kvs.array.items.len == 0) return null;
@@ -61,18 +61,17 @@ pub fn get(self: *Self, allocator: std.mem.Allocator, key: []const u8) !?[]const
     return try b64decode(allocator, val_b64.string);
 }
 
-pub fn getPrefix(self: *Self, allocator: std.mem.Allocator, prefix: []const u8) ![]AgentStatus {
+pub fn getPrefix(self: *Self, alloc: std.mem.Allocator, prefix: []const u8) ![]AgentStatus {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const prefix_b64 = try b64encode(allocator, prefix);
-    defer allocator.free(prefix_b64);
 
     const body = try std.fmt.allocPrint(allocator, "{{\"key\":\"{s}\",\"range_end\":\"{s}\"}}", .{ prefix_b64, keyEnd(allocator, prefix_b64) catch unreachable });
-    defer allocator.free(body);
 
     const resp = try http.request(allocator, self.io, self.host, self.port, "POST", "/v3/kv/range", body);
-    defer allocator.free(resp);
 
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, resp, .{});
-    defer parsed.deinit();
 
     const kvs = parsed.value.object.get("kvs") orelse return &.{};
     var result = try std.ArrayList(AgentStatus).initCapacity(allocator, kvs.array.items.len);
@@ -110,3 +109,4 @@ pub const AgentStatus = struct {
     hostname: []const u8,
     status: []const u8,
 };
+

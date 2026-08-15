@@ -9,7 +9,7 @@ vars:
     sh: yq -o=json '.instances | keys' testing/instances.yaml
   INSTANCES_NAMES:
     ref: fromYaml .INSTANCES_NAMES_JSON
-  SSHIPTS: '-i ~/.ssh/vagrant_ecdsa'
+  SSHIPTS: '-i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 
 tasks:
   build-builder:
@@ -60,7 +60,7 @@ tasks:
     dir: './testing'
     cmd: |
       {{range $index, $element := .TARGETS | fromJson}}
-      vagrant up {{ $element }} &
+      vagrant up {{ $element }} --provision &
       {{end}}
       wait
 
@@ -100,27 +100,10 @@ tasks:
     deps:
       - build
 
-  ctrl-up:
-    desc: 'Start etcd + controller stack orchestrator'
-    cmds:
-      - docker compose up -d etcd
-      - sleep 2
-      - './zig-out/bin/minim-controller k8s_stack.jsonnet 8080 127.0.0.1 2379 &'
-      - sleep 1
-      - echo 'Controller listening on :8080, etcd on :2379'
-    deps:
-      - build
-
-  ctrl-down:
-    desc: 'Stop controller + etcd'
-    cmds:
-      - 'pkill -f minim-controller 2>/dev/null; true'
-      - docker compose down
-    ignore_error: true
-
   v-cluster:
     desc: 'Bootstrap the full K8s cluster (masters then workers)'
     cmds:
+      - task: v-redeploy:controller-01
       - task: v-redeploy:master-01
       - task: v-redeploy:master-02
       - task: v-redeploy:master-03
@@ -129,7 +112,25 @@ tasks:
       - task: v-redeploy:worker-03
     deps:
       - build
-      - ctrl-up
+
+  v-bootstrap:*:
+    vars:
+      T: "{{ index .MATCH 0 }}"
+      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
+    desc: 'Bootstrap {{index .MATCH 0}} VM (setup dependencies)'
+    cmds:
+      - cmd: |
+          {{range $index, $element := .TARGETS | fromJson}}
+          {{$bootstrap := index $.INSTANCES.instances $element "bootstrap"}}
+          {{if $bootstrap}}
+          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
+          echo "Bootstrapping $NAME..."
+          {{range $bootstrap}}
+          ssh root@$IP {{$.SSHIPTS}} "{{.}}" &
+          {{end}}
+          {{end}}
+          {{end}}
+          wait
 
   v-redeploy:*:
     vars:
@@ -139,6 +140,7 @@ tasks:
     cmds:
       - task: "v-destroy:{{ .T }}"
       - task: "v-up:{{ .T }}"
+      - task: "v-bootstrap:{{ .T }}"
       - task: "v-deploy:{{ .T }}"
       - task: "v-run:{{ .T }}"
     deps:
@@ -153,6 +155,7 @@ tasks:
       - cmd: |
           {{range $index, $element := .TARGETS | fromJson}}
           IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
-          echo "{{index $.INSTANCES.instances $element "run"}}" | ssh root@$IP {{$.SSHIPTS}} &
+          CMD="systemd-run --unit={{$element}} --description='{{$element}} service' --same-dir --collect --property=Type=simple --property=Restart=on-failure $(echo '{{index $.INSTANCES.instances $element "run"}}')"
+          ssh root@$IP {{$.SSHIPTS}} "$CMD" &
           {{end}}
           wait
