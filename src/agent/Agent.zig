@@ -44,7 +44,11 @@ pub fn runFromController(self: *Self, host: []const u8, port: u16) !void {
                 continue;
             };
             defer parsed.deinit();
-            const retry_after = if (parsed.value.object.get("retry_after")) |ra| @as(u64, @intFromFloat(ra.float)) else 5;
+            const retry_after = if (parsed.value.object.get("retry_after")) |ra| @as(u64, switch (ra) {
+                .integer => |i| @intCast(i),
+                .float => |f| @intFromFloat(f),
+                else => 5,
+            }) else 5;
             const waiting_for = if (parsed.value.object.get("waiting_for")) |wf| wf.string else "unknown";
             std.debug.print("agent: waiting for {s} (retry in {d}s)\n", .{ waiting_for, retry_after });
             sleepSec(retry_after);

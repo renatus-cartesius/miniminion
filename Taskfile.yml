@@ -76,7 +76,7 @@ tasks:
       {{end}}
       wait
 
-  v-ssh:*:
+  v-login:*:
     desc: 'Login into {{index .MATCH 0}} vagrant vm'
     vars:
       VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
@@ -125,9 +125,11 @@ tasks:
           {{if $bootstrap}}
           IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
           echo "Bootstrapping $NAME..."
+          ssh root@$IP {{$.SSHIPTS}} 'bash -s' <<'BOOTSTRAP_SCRIPT' &
           {{range $bootstrap}}
-          ssh root@$IP {{$.SSHIPTS}} "{{.}}" &
+          {{.}}
           {{end}}
+          BOOTSTRAP_SCRIPT
           {{end}}
           {{end}}
           wait
@@ -155,7 +157,7 @@ tasks:
       - cmd: |
           {{range $index, $element := .TARGETS | fromJson}}
           IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
-          CMD="systemd-run --unit={{$element}} --description='{{$element}} service' --same-dir --collect --property=Type=simple --property=Restart=on-failure $(echo '{{index $.INSTANCES.instances $element "run"}}')"
+          CMD="systemctl stop {{$element}} 2>/dev/null; systemctl reset-failed {{$element}} 2>/dev/null; systemd-run --unit={{$element}} --description='{{$element}} service' --same-dir --collect --property=Type=simple --property=Restart=on-failure sh -c '{{index $.INSTANCES.instances $element "run"}}'"
           ssh root@$IP {{$.SSHIPTS}} "$CMD" &
           {{end}}
           wait
