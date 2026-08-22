@@ -148,6 +148,32 @@ tasks:
     deps:
       - build
 
+  v-cmd:*:
+    vars:
+      T: "{{ index .MATCH 0 }}"
+      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}{{.T | splitList "," | toJson}}{{end}}'
+    desc: 'Run arbitrary command on VMs (e.g. task v-cmd:all -- hostnamectl)'
+    cmds:
+      - cmd: |
+          TMPDIR=$(mktemp -d)
+          {{range $index, $element := .TARGETS | fromJson}}
+          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
+          ( ssh root@$IP {{$.SSHIPTS}} "{{$.CLI_ARGS}}" >"$TMPDIR/$NAME.out" 2>"$TMPDIR/$NAME.err" ) &
+          {{end}}
+          wait
+          for f in "$TMPDIR"/*.out; do
+            name=$(basename "$f" .out)
+            echo "========== $name =========="
+            cat "$f"
+            if [ -s "$TMPDIR/$name.err" ]; then
+              echo "-- stderr --"
+              cat "$TMPDIR/$name.err"
+            fi
+            echo
+          done
+          rm -rf "$TMPDIR"
+        silent: true
+
   v-run:*:
     vars:
       T: "{{ index .MATCH 0 }}"
