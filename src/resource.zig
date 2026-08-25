@@ -138,7 +138,7 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
 
         const output_name = if (resource_data.object.get("output_name")) |v| v.string else "";
 
-        const export_config = if (resource_data.object.get("export")) |v| blk: {
+        const export_config = if (resource_data.object.get("kv_export")) |v| blk: {
             if (v != .object) break :blk null;
             const export_key = v.object.get("key") orelse return error.MissingExportKey;
             const export_value = if (v.object.get("value")) |ev| ev.string else null;

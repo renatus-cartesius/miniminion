@@ -36,7 +36,7 @@ pub fn apply(self: *Self) !bool {
     }
 
     if (result.term == .exited and result.term.exited == 0) {
-        self.stdout = result.stdout;
+        self.stdout = try allocator.dupe(u8, std.mem.trimEnd(u8, result.stdout, "\n\r"));
         allocator.free(result.stderr);
         return true;
     }

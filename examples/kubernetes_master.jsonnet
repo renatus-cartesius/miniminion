@@ -124,10 +124,10 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
   }),
 
   token_extract: Resource('shell', {
-    command: "echo '{{ ctx.cluster_init }}' | grep -oP '--token \\K\\S+'",
+    command: 'kubeadm token create --ttl 0 2>/dev/null',
     output_name: 'k8s_token',
     kv_export: { key: 'k8s_token' },
-    deps: ['cluster_init'],
+    deps: ['setup_kubectl'],
   }),
 
   hash_extract: Resource('shell', {
