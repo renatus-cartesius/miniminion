@@ -183,7 +183,7 @@ tasks:
       - cmd: |
           {{range $index, $element := .TARGETS | fromJson}}
           IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
-          CMD="systemctl stop {{$element}} 2>/dev/null; systemctl reset-failed {{$element}} 2>/dev/null; systemd-run --unit={{$element}} --description='{{$element}} service' --same-dir --collect --property=Type=simple --property=Restart=on-failure sh -c '{{index $.INSTANCES.instances $element "run"}}'"
+          CMD="systemctl stop minim-agent 2>/dev/null; systemctl reset-failed minim-agent 2>/dev/null; systemd-run --unit=minim-agent --description='minim-agent service' --same-dir --collect --property=Type=simple --property=Restart=on-failure sh -c '{{index $.INSTANCES.instances $element "run"}}'"
           ssh root@$IP {{$.SSHIPTS}} "$CMD" &
           {{end}}
           wait
