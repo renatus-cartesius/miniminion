@@ -9,7 +9,7 @@ vars:
     sh: yq -o=json '.instances | keys' testing/instances.yaml
   INSTANCES_NAMES:
     ref: fromYaml .INSTANCES_NAMES_JSON
-  SSHIPTS: '-i ~/.ssh/vagrant_ecdsa'
+  SSHIPTS: '-i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 
 tasks:
   build-builder:
@@ -34,11 +34,18 @@ tasks:
       - build-builder
 
   test:
-    desc: Run all tests
+    desc: Run unit tests
     cmds:
       - docker run --rm -v .:/workspace -w /workspace miniminion-builder zig test src/resource.zig -lc -static --name all-tests
     deps:
       - build-builder
+
+  test-e2e:
+    desc: Run stack orchestration e2e tests
+    cmds:
+      - bash test/e2e_stack.sh
+    deps:
+      - build
 
   v-status:
     desc: 'Get status for vagrant instances'
@@ -53,7 +60,7 @@ tasks:
     dir: './testing'
     cmd: |
       {{range $index, $element := .TARGETS | fromJson}}
-      vagrant up {{ $element }} &
+      vagrant up {{ $element }} --provision &
       {{end}}
       wait
 
@@ -69,7 +76,7 @@ tasks:
       {{end}}
       wait
 
-  v-ssh:*:
+  v-login:*:
     desc: 'Login into {{index .MATCH 0}} vagrant vm'
     vars:
       VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
@@ -93,6 +100,40 @@ tasks:
     deps:
       - build
 
+  v-cluster:
+    desc: 'Bootstrap the full K8s cluster (masters then workers)'
+    cmds:
+      - task: v-redeploy:controller-01
+      - task: v-redeploy:master-01
+      - task: v-redeploy:master-02
+      - task: v-redeploy:master-03
+      - task: v-redeploy:worker-01
+      - task: v-redeploy:worker-02
+      - task: v-redeploy:worker-03
+    deps:
+      - build
+
+  v-bootstrap:*:
+    vars:
+      T: "{{ index .MATCH 0 }}"
+      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
+    desc: 'Bootstrap {{index .MATCH 0}} VM (setup dependencies)'
+    cmds:
+      - cmd: |
+          {{range $index, $element := .TARGETS | fromJson}}
+          {{$bootstrap := index $.INSTANCES.instances $element "bootstrap"}}
+          {{if $bootstrap}}
+          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
+          echo "Bootstrapping $NAME..."
+          ssh root@$IP {{$.SSHIPTS}} 'bash -s' <<'BOOTSTRAP_SCRIPT' &
+          {{range $bootstrap}}
+          {{.}}
+          {{end}}
+          BOOTSTRAP_SCRIPT
+          {{end}}
+          {{end}}
+          wait
+
   v-redeploy:*:
     vars:
       T: "{{ index .MATCH 0 }}"
@@ -101,10 +142,37 @@ tasks:
     cmds:
       - task: "v-destroy:{{ .T }}"
       - task: "v-up:{{ .T }}"
+      - task: "v-bootstrap:{{ .T }}"
       - task: "v-deploy:{{ .T }}"
       - task: "v-run:{{ .T }}"
     deps:
       - build
+
+  v-cmd:*:
+    vars:
+      T: "{{ index .MATCH 0 }}"
+      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}{{.T | splitList "," | toJson}}{{end}}'
+    desc: 'Run arbitrary command on VMs (e.g. task v-cmd:all -- hostnamectl)'
+    cmds:
+      - cmd: |
+          TMPDIR=$(mktemp -d)
+          {{range $index, $element := .TARGETS | fromJson}}
+          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
+          ( ssh root@$IP {{$.SSHIPTS}} "{{$.CLI_ARGS}}" >"$TMPDIR/$NAME.out" 2>"$TMPDIR/$NAME.err" ) &
+          {{end}}
+          wait
+          for f in "$TMPDIR"/*.out; do
+            name=$(basename "$f" .out)
+            echo "========== $name =========="
+            cat "$f"
+            if [ -s "$TMPDIR/$name.err" ]; then
+              echo "-- stderr --"
+              cat "$TMPDIR/$name.err"
+            fi
+            echo
+          done
+          rm -rf "$TMPDIR"
+        silent: true
 
   v-run:*:
     vars:
@@ -115,6 +183,7 @@ tasks:
       - cmd: |
           {{range $index, $element := .TARGETS | fromJson}}
           IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
-          echo "{{index $.INSTANCES.instances $element "run"}}" | ssh root@$IP {{$.SSHIPTS}} &
+          CMD="systemctl stop minim-agent 2>/dev/null; systemctl reset-failed minim-agent 2>/dev/null; systemd-run --unit=minim-agent --description='minim-agent service' --same-dir --collect --property=Type=simple --property=Restart=on-failure sh -c '{{index $.INSTANCES.instances $element "run"}}'"
+          ssh root@$IP {{$.SSHIPTS}} "$CMD" &
           {{end}}
           wait

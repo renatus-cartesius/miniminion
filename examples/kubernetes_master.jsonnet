@@ -1,6 +1,3 @@
-// Example: Kubernetes master node setup on Ubuntu 24.04 and CentOS 9
-// Uses containerd runtime, kubeadm, and flannel CNI.
-
 local Resource(type, args={}, deps=[]) = {
   deps: deps,
   type: type,
@@ -8,19 +5,16 @@ local Resource(type, args={}, deps=[]) = {
 
 local shellExec = std.native('shellExec');
 
-// Distro detection
 local has_apt = shellExec('which apt-get >/dev/null 2>&1 && echo -n yes || true');
 local has_dnf = shellExec('which dnf >/dev/null 2>&1 && echo -n yes || true');
 local is_ubuntu = has_apt == 'yes';
 local is_centos = has_dnf == 'yes';
 local pkg_type = if is_ubuntu then 'apt_pkg' else 'dnf_pkg';
-
-// Guard checks
 local swap_on = shellExec('swapon --show | wc -l');
-local k8s_apt_repo_added = shellExec('[ -f /etc/apt/sources.list.d/k8s.list ] && echo -n yes || true');
-local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] && echo -n yes || true');
-local cluster_init = shellExec('[ -f /etc/kubernetes/admin.conf ] && echo -n yes || true');
-local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}' | cut -d/ -f1 | head -1");
+
+local already_init = shellExec('[ -f /etc/kubernetes/admin.conf ] && echo -n yes || true');
+local api_reachable = shellExec('curl -sk https://192.168.56.11:6443/healthz >/dev/null 2>/dev/null && echo -n yes || true');
+local my_ip = shellExec("ip -4 addr show | grep -oP '192\\.168\\.56\\.\\d+' | head -1");
 
 // ---------- Phase 1: System preconditions ----------
 (if swap_on != '0' then {
@@ -31,9 +25,9 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
 
 // ---------- Phase 2: Package cache update ----------
 (if is_ubuntu then {
-  update_cache: Resource('apt_update', {}, deps=(if swap_on != '0' then ['disable_swap'] else [])),
+  update_cache: Resource('apt_update', {}),
 } else {
-  update_cache: Resource('dnf_update', {}, deps=(if swap_on != '0' then ['disable_swap'] else [])),
+  update_cache: Resource('dnf_update', {}),
 }) +
 
 // ---------- Phase 3: Kernel modules + sysctl ----------
@@ -41,7 +35,6 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
   kernel_modules: Resource('kernel_module', {
     modules: ['overlay', 'br_netfilter'],
   }),
-
   sysctl_setup: Resource('sysctl', {
     params: {
       'net.bridge.bridge-nf-call-iptables': '1',
@@ -49,23 +42,19 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
       'net.ipv4.ip_forward': '1',
     },
   }, deps=['kernel_modules']),
-}
-
-+
+} +
 
 // ---------- Phase 4: Containerd ----------
 (if is_centos then {
    docker_repo: Resource('shell', {
      command: 'yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo || true',
    }),
- } else {})
-
-+
+ } else {}) +
 
 {
   containerd: Resource(pkg_type, {
     name: if is_ubuntu then 'containerd' else 'containerd.io',
-  }, deps=(if is_centos then ['docker_repo'] else []) + ['update_cache']),
+  }, deps=['update_cache'] + (if is_centos then ['docker_repo'] else [])),
 
   containerd_config: Resource('shell', {
     command: if is_ubuntu then
@@ -79,11 +68,12 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
     state: 'running',
     enabled: true,
   }, deps=['containerd_config']),
-}
+} +
 
-+
+// ---------- Phase 5: k8s repo + tools ----------
+local k8s_apt_repo_added = shellExec('[ -f /etc/apt/sources.list.d/k8s.list ] && echo -n yes || true');
+local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] && echo -n yes || true');
 
-// ---------- Phase 4: k8s repo + tools ----------
 (if is_ubuntu && k8s_apt_repo_added != 'yes' then {
    k8s_repo: Resource('apt_repo', {
      key_url: 'https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key',
@@ -91,59 +81,68 @@ local api_server_ip = shellExec("ip -4 addr show | awk '/inet 192.168/{print $2}
      source: 'deb [signed-by=/etc/apt/keyrings/k8s.asc] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /',
      source_path: '/etc/apt/sources.list.d/k8s.list',
    }, deps=['containerd_service']),
-
    repo_update: Resource('apt_update', {}, deps=['k8s_repo']),
- } else {})
-
-+
+ } else {}) +
 
 (if is_centos && k8s_rpm_repo_added != 'yes' then {
    k8s_repo: Resource('shell', {
      command: 'printf "[kubernetes]\nname=Kubernetes\nbaseurl=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/\nenabled=1\ngpgcheck=1\ngpgkey=https://pkgs.k8s.io/core:/stable:/v1.30/rpm/repodata/repomd.xml.key\n" > /etc/yum.repos.d/kubernetes.repo',
    }, deps=['containerd_service']),
-
    repo_update: Resource('dnf_update', {}, deps=['k8s_repo']),
- } else {})
-
-+
+ } else {}) +
 
 {
-  kubeadm: Resource(pkg_type, { name: 'kubeadm' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
-  kubelet: Resource(pkg_type, { name: 'kubelet' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
-  kubectl: Resource(pkg_type, { name: 'kubectl' }, deps=(if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
-}
+  kubelet: Resource(pkg_type, { name: 'kubelet' }, deps=['containerd_service'] + (if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
+  kubectl: Resource(pkg_type, { name: 'kubectl' }, deps=['containerd_service'] + (if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
+  kubeadm: Resource(pkg_type, { name: 'kubeadm' }, deps=['containerd_service'] + (if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
+  cni_plugins: Resource(pkg_type, { name: 'kubernetes-cni' }, deps=['containerd_service'] + (if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
+} +
 
-+
-
-// ---------- Phase 5: Hold k8s packages ----------
-(if is_ubuntu then {
-   hold_k8s_pkgs: Resource('shell', {
-     command: 'apt-mark hold kubeadm kubelet kubectl',
-   }, deps=['kubeadm', 'kubelet', 'kubectl']),
- } else {})
-
-+
-
-// ---------- Phase 6: kubeadm init ----------
-(if cluster_init != 'yes' then {
-   kubeadm_init: Resource('shell', {
-     command: 'kubeadm init --pod-network-cidr=10.244.0.0/16 --skip-phases=addon/kube-proxy --apiserver-advertise-address=' + api_server_ip + ' --ignore-preflight-errors=NumCPU,Mem,CRI',
-   }, deps=['containerd_service', 'sysctl_setup'] + (if swap_on != '0' then ['disable_swap'] else []) + (if is_ubuntu then ['hold_k8s_pkgs'] else ['kubeadm', 'kubelet', 'kubectl'])),
- } else {})
-
-+
-
-// ---------- Phase 7: Post-init ----------
-{
-  kubeconfig: Resource('shell', {
-    command: 'mkdir -p /root/.kube && cp -i /etc/kubernetes/admin.conf /root/.kube/config 2>/dev/null; chown root:root /root/.kube/config 2>/dev/null && sleep 20',
-  }, deps=(if cluster_init != 'yes' then ['kubeadm_init'] else [])),
-
-  flannel_cni: Resource('shell', {
-    command: 'kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml --validate=false',
-  }, deps=['kubeconfig']),
-
-  master_ready: Resource('shell', {
-    command: 'kubectl --kubeconfig=/etc/kubernetes/admin.conf taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null; kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o wide',
-  }, deps=['flannel_cni']),
-}
+// ---------- Phase 6: Cluster init or join ----------
+(if already_init == 'yes' then {
+  setup_kubectl: Resource('shell', {
+    command: 'mkdir -p $HOME/.kube && [ -f /etc/kubernetes/admin.conf ] && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
+  }),
+  cni_install: Resource('shell', {
+    command: 'kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml 2>/dev/null; true',
+  }, deps=['setup_kubectl']),
+} else if api_reachable != 'yes' then {
+  cluster_init: Resource('shell', {
+    command: 'kubeadm init --apiserver-advertise-address=' + my_ip + ' --control-plane-endpoint=192.168.56.11:6443 --pod-network-cidr=10.244.0.0/16',
+  }, deps=['kubeadm', 'containerd', 'cni_plugins']),
+  upload_certs: Resource('shell', {
+    command: 'kubeadm init phase upload-certs --upload-certs --certificate-key 6f796a21cbf5d612b98b7c87a2a00dd25bc9fc068d0b55197dfec134c5f77823 2>/dev/null; true',
+  }, deps=['cluster_init']),
+  setup_kubectl: Resource('shell', {
+    command: 'mkdir -p $HOME/.kube && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
+  }, deps=['cluster_init']),
+  patch_apiserver: Resource('shell', {
+    command: |||
+      grep -q "bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null || sed -i "/- --advertise-address/a\\    - --bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml
+      touch /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null; true
+    |||,
+  }, deps=['setup_kubectl']),
+  cni_install: Resource('shell', {
+    command: 'kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml 2>/dev/null; true',
+  }, deps=['patch_apiserver']),
+} else {
+  cluster_join: Resource('shell', {
+    command: std.strReplace(|||
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/vagrant_ecdsa"
+      REMOTE="root@192.168.56.11"
+      TOKEN=$(timeout 10 ssh $SSH_OPTS $REMOTE "kubeadm token create --ttl 0" 2>/dev/null)
+      HASH=$(timeout 10 ssh $SSH_OPTS $REMOTE "openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'" 2>/dev/null)
+      CERT_KEY=$(timeout 10 ssh $SSH_OPTS $REMOTE "kubeadm init phase upload-certs --upload-certs --certificate-key 6f796a21cbf5d612b98b7c87a2a00dd25bc9fc068d0b55197dfec134c5f77823 2>/dev/null | tail -1" 2>/dev/null)
+      kubeadm join 192.168.56.11:6443 --token "$TOKEN" --discovery-token-ca-cert-hash "sha256:$HASH" --control-plane --certificate-key "$CERT_KEY" --apiserver-advertise-address={{my_ip}} --ignore-preflight-errors=all
+    |||, '{{my_ip}}', my_ip),
+  }, deps=['kubeadm', 'containerd', 'cni_plugins']),
+  setup_kubectl: Resource('shell', {
+    command: 'mkdir -p $HOME/.kube && [ -f /etc/kubernetes/admin.conf ] && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
+  }, deps=['cluster_join']),
+  patch_apiserver: Resource('shell', {
+    command: |||
+      grep -q "bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null || sed -i "/- --advertise-address/a\\    - --bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml
+      touch /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null; true
+    |||,
+  }, deps=['setup_kubectl']),
+})
