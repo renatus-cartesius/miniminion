@@ -109,10 +109,34 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
 } else if api_reachable != 'yes' then {
   cluster_init: Resource('shell', {
     command: 'kubeadm init --apiserver-advertise-address=' + my_ip + ' --control-plane-endpoint=192.168.56.11:6443 --pod-network-cidr=10.244.0.0/16',
+    output_name: 'init_output',
   }, deps=['kubeadm', 'containerd', 'cni_plugins']),
+
+  gen_cert_key: Resource('shell', {
+    command: 'openssl rand -hex 32',
+    output_name: 'cert_key',
+    kv_export: { key: 'k8s_cert_key' },
+  }),
+
   upload_certs: Resource('shell', {
-    command: 'kubeadm init phase upload-certs --upload-certs --certificate-key 6f796a21cbf5d612b98b7c87a2a00dd25bc9fc068d0b55197dfec134c5f77823 2>/dev/null; true',
-  }, deps=['cluster_init']),
+    command: 'kubeadm init phase upload-certs --upload-certs --certificate-key {{ ctx.gen_cert_key }} 2>/dev/null; true',
+    deps: ['cluster_init', 'gen_cert_key'],
+  }),
+
+  token_extract: Resource('shell', {
+    command: "echo '{{ ctx.cluster_init }}' | grep -oP '--token \\K\\S+'",
+    output_name: 'k8s_token',
+    kv_export: { key: 'k8s_token' },
+    deps: ['cluster_init'],
+  }),
+
+  hash_extract: Resource('shell', {
+    command: 'openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed "s/^.* //"',
+    output_name: 'k8s_hash',
+    kv_export: { key: 'k8s_hash' },
+    deps: ['cluster_init'],
+  }),
+
   setup_kubectl: Resource('shell', {
     command: 'mkdir -p $HOME/.kube && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
   }, deps=['cluster_init']),
@@ -128,12 +152,7 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
 } else {
   cluster_join: Resource('shell', {
     command: std.strReplace(|||
-      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/vagrant_ecdsa"
-      REMOTE="root@192.168.56.11"
-      TOKEN=$(timeout 10 ssh $SSH_OPTS $REMOTE "kubeadm token create --ttl 0" 2>/dev/null)
-      HASH=$(timeout 10 ssh $SSH_OPTS $REMOTE "openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'" 2>/dev/null)
-      CERT_KEY=$(timeout 10 ssh $SSH_OPTS $REMOTE "kubeadm init phase upload-certs --upload-certs --certificate-key 6f796a21cbf5d612b98b7c87a2a00dd25bc9fc068d0b55197dfec134c5f77823 2>/dev/null | tail -1" 2>/dev/null)
-      kubeadm join 192.168.56.11:6443 --token "$TOKEN" --discovery-token-ca-cert-hash "sha256:$HASH" --control-plane --certificate-key "$CERT_KEY" --apiserver-advertise-address={{my_ip}} --ignore-preflight-errors=all
+      kubeadm join 192.168.56.11:6443 --token {{ ctx.global.k8s_token }} --discovery-token-ca-cert-hash sha256:{{ ctx.global.k8s_hash }} --control-plane --certificate-key {{ ctx.global.k8s_cert_key }} --apiserver-advertise-address={{my_ip}} --ignore-preflight-errors=all
     |||, '{{my_ip}}', my_ip),
   }, deps=['kubeadm', 'containerd', 'cni_plugins']),
   setup_kubectl: Resource('shell', {
