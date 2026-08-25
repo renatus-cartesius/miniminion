@@ -98,7 +98,9 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
   cni_plugins: Resource(pkg_type, { name: 'kubernetes-cni' }, deps=['containerd_service'] + (if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
 } +
 
-// ---------- Phase 6: Cluster init or join ----------
+// ---------- Phase 6: Cluster identity management ----------
+// These always run on the initializing master (master-01) to seed KV data.
+// token_extract and hash_extract are duplicated in Phase 7 to refresh on re-apply.
 (if already_init == 'yes' then {
   setup_kubectl: Resource('shell', {
     command: 'mkdir -p $HOME/.kube && [ -f /etc/kubernetes/admin.conf ] && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
@@ -109,7 +111,6 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
 } else if api_reachable != 'yes' then {
   cluster_init: Resource('shell', {
     command: 'kubeadm init --apiserver-advertise-address=' + my_ip + ' --control-plane-endpoint=192.168.56.11:6443 --pod-network-cidr=10.244.0.0/16',
-    output_name: 'init_output',
   }, deps=['kubeadm', 'containerd', 'cni_plugins']),
 
   gen_cert_key: Resource('shell', {
@@ -122,6 +123,10 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
     command: 'kubeadm init phase upload-certs --upload-certs --certificate-key {{ ctx.gen_cert_key }} 2>/dev/null; true',
     deps: ['cluster_init', 'gen_cert_key'],
   }),
+
+  setup_kubectl: Resource('shell', {
+    command: 'mkdir -p $HOME/.kube && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
+  }, deps=['cluster_init']),
 
   token_extract: Resource('shell', {
     command: 'kubeadm token create --ttl 0 2>/dev/null',
@@ -137,9 +142,6 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
     deps: ['cluster_init'],
   }),
 
-  setup_kubectl: Resource('shell', {
-    command: 'mkdir -p $HOME/.kube && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
-  }, deps=['cluster_init']),
   patch_apiserver: Resource('shell', {
     command: |||
       grep -q "bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null || sed -i "/- --advertise-address/a\\    - --bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml
@@ -164,4 +166,21 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
       touch /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null; true
     |||,
   }, deps=['setup_kubectl']),
-})
+}) +
+
+// ---------- Phase 7: KV refresh on re-apply (always runs when API is up) ----------
+// This ensures token/hash are always in etcd even after controller restart or etcd reset.
+(if api_reachable == 'yes' then {
+  token_refresh: Resource('shell', {
+    command: 'kubeadm token create --ttl 0 2>/dev/null',
+    output_name: 'k8s_token',
+    kv_export: { key: 'k8s_token' },
+    deps: ['setup_kubectl'],
+  }),
+  hash_refresh: Resource('shell', {
+    command: 'openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed "s/^.* //"',
+    output_name: 'k8s_hash',
+    kv_export: { key: 'k8s_hash' },
+    deps: ['setup_kubectl'],
+  }),
+} else {})
