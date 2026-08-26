@@ -100,10 +100,12 @@ fn handleGet(self: *Self, stk: *stack.Stack, ec: *etcd_mod, writer: *std.Io.net.
     _ = body;
 
     if (std.mem.startsWith(u8, target, "/kv/get")) {
-        const key = parseQueryParam(target, "key") orelse {
+        const raw_key = parseQueryParam(target, "key") orelse {
             try writeResponse(writer, 400, "Bad Request", "{\"error\":\"missing key\"}");
             return;
         };
+        const key = try std.fmt.allocPrint(self.allocator, "/minions_kv/{s}", .{raw_key});
+        defer self.allocator.free(key);
         const value = ec.get(self.allocator, key) catch |err| {
             const resp = try std.fmt.allocPrint(self.allocator, "{{\"error\":\"etcd error: {}\"}}", .{err});
             defer self.allocator.free(resp);
@@ -164,7 +166,7 @@ fn handlePost(self: *Self, stk: *stack.Stack, ec: *etcd_mod, writer: *std.Io.net
         const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, body, .{});
         defer parsed.deinit();
 
-        const key = parsed.value.object.get("key") orelse {
+        const raw_key = parsed.value.object.get("key") orelse {
             try writeResponse(writer, 400, "Bad Request", "{\"error\":\"missing key\"}");
             return;
         };
@@ -172,7 +174,9 @@ fn handlePost(self: *Self, stk: *stack.Stack, ec: *etcd_mod, writer: *std.Io.net
             try writeResponse(writer, 400, "Bad Request", "{\"error\":\"missing value\"}");
             return;
         };
-        ec.put(self.allocator, key.string, value.string) catch |err| {
+        const key = try std.fmt.allocPrint(self.allocator, "/minions_kv/{s}", .{raw_key.string});
+        defer self.allocator.free(key);
+        ec.put(self.allocator, key, value.string) catch |err| {
             const resp = try std.fmt.allocPrint(self.allocator, "{{\"error\":\"etcd error: {}\"}}", .{err});
             defer self.allocator.free(resp);
             try writeResponse(writer, 500, "Internal Server Error", resp);
