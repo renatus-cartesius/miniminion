@@ -15,6 +15,7 @@ local swap_on = shellExec('swapon --show | wc -l');
 local already_init = shellExec('[ -f /etc/kubernetes/admin.conf ] && echo -n yes || true');
 local api_reachable = shellExec('curl -sk https://192.168.56.11:6443/healthz >/dev/null 2>/dev/null && echo -n yes || true');
 local my_ip = shellExec("ip -4 addr show | grep -oP '192\\.168\\.56\\.\\d+' | head -1");
+local hostname = shellExec('hostname -s');
 
 // ---------- Phase 1: System preconditions ----------
 (if swap_on != '0' then {
@@ -108,7 +109,7 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
   cni_install: Resource('shell', {
     command: 'kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml 2>/dev/null; true',
   }, deps=['setup_kubectl']),
-} else if api_reachable != 'yes' then {
+} else if hostname == 'master-01' then {
   cluster_init: Resource('shell', {
     command: 'kubeadm init --apiserver-advertise-address=' + my_ip + ' --control-plane-endpoint=192.168.56.11:6443 --pod-network-cidr=10.244.0.0/16',
   }, deps=['kubeadm', 'containerd', 'cni_plugins']),
@@ -170,7 +171,7 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
 
 // ---------- Phase 7: KV refresh on re-apply (always runs when API is up) ----------
 // This ensures token/hash are always in etcd even after controller restart or etcd reset.
-(if api_reachable == 'yes' then {
+(if hostname == 'master-01' && api_reachable == 'yes' then {
   token_refresh: Resource('shell', {
     command: 'kubeadm token create --ttl 0 2>/dev/null',
     output_name: 'k8s_token',
