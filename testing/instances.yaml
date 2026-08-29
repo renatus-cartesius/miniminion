@@ -47,38 +47,9 @@ instances:
       - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ~/.ssh/vagrant_ecdsa root@$IP:/root/.ssh/'
     run: '/root/minim-agent --controller 192.168.56.10:8080'
 
-  master-04:
-    box: bento/ubuntu-24.04
-    ip: 192.168.56.14
-    memory: "3072"
-    cpus: 2
-    deploy:
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./zig-out/bin/minim-agent root@$IP:/root/'
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./examples/ root@$IP:/root/examples/'
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ~/.ssh/vagrant_ecdsa root@$IP:/root/.ssh/'
-    run: '/root/minim-agent --controller 192.168.56.10:8080'
+  
 
-  master-05:
-    box: bento/ubuntu-24.04
-    ip: 192.168.56.15
-    memory: "3072"
-    cpus: 2
-    deploy:
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./zig-out/bin/minim-agent root@$IP:/root/'
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./examples/ root@$IP:/root/examples/'
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ~/.ssh/vagrant_ecdsa root@$IP:/root/.ssh/'
-    run: '/root/minim-agent --controller 192.168.56.10:8080'
-
-  master-06:
-    box: bento/ubuntu-24.04
-    ip: 192.168.56.16
-    memory: "3072"
-    cpus: 2
-    deploy:
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./zig-out/bin/minim-agent root@$IP:/root/'
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./examples/ root@$IP:/root/examples/'
-      - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ~/.ssh/vagrant_ecdsa root@$IP:/root/.ssh/'
-    run: '/root/minim-agent --controller 192.168.56.10:8080'
+  
 
   worker-01:
     box: bento/ubuntu-24.04
