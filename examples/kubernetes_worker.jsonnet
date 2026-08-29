@@ -94,9 +94,13 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
 
 // ---------- Phase 6: Join cluster ----------
 {
+  cluster_join: Resource('shell', {
+    command: 'kubeadm join 192.168.56.11:6443 --token {{ ctx.global.k8s_token }} --discovery-token-ca-cert-hash sha256:{{ ctx.global.k8s_hash }} --ignore-preflight-errors=all 2>/dev/null; true',
+  }, deps=['kubeadm', 'kubelet']),
+
   kubelet_start: Resource('service', {
     name: 'kubelet',
     state: 'running',
     enabled: true,
-  }, deps=['kubeadm', 'kubelet']),
+  }, deps=['cluster_join']),
 }
