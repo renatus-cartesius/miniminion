@@ -99,6 +99,28 @@ fn handleConnection(self: *Self, stk: *stack.Stack, ec: *etcd_mod, reader: *std.
 fn handleGet(self: *Self, stk: *stack.Stack, ec: *etcd_mod, writer: *std.Io.net.Stream.Writer, target: []const u8, body: []const u8) !void {
     _ = body;
 
+    if (std.mem.startsWith(u8, target, "/kv/get")) {
+        const raw_key = parseQueryParam(target, "key") orelse {
+            try writeResponse(writer, 400, "Bad Request", "{\"error\":\"missing key\"}");
+            return;
+        };
+        const key = try std.fmt.allocPrint(self.allocator, "/minions_kv/{s}", .{raw_key});
+        defer self.allocator.free(key);
+        const value = ec.get(self.allocator, key) catch |err| {
+            const resp = try std.fmt.allocPrint(self.allocator, "{{\"error\":\"etcd error: {}\"}}", .{err});
+            defer self.allocator.free(resp);
+            try writeResponse(writer, 500, "Internal Server Error", resp);
+            return;
+        };
+        const resp = if (value) |v| blk: {
+            defer self.allocator.free(v);
+            break :blk try self.allocator.dupe(u8, v);
+        } else "";
+        defer self.allocator.free(resp);
+        try writeResponse(writer, 200, "OK", resp);
+        return;
+    }
+
     const hostname = parseQueryParam(target, "hostname") orelse {
         try writeResponse(writer, 400, "Bad Request", "{\"error\":\"missing hostname\"}");
         return;
@@ -139,6 +161,30 @@ fn handleGet(self: *Self, stk: *stack.Stack, ec: *etcd_mod, writer: *std.Io.net.
 
 fn handlePost(self: *Self, stk: *stack.Stack, ec: *etcd_mod, writer: *std.Io.net.Stream.Writer, target: []const u8, body: []const u8) !void {
     _ = stk;
+
+    if (std.mem.eql(u8, target, "/kv/put")) {
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, body, .{});
+        defer parsed.deinit();
+
+        const raw_key = parsed.value.object.get("key") orelse {
+            try writeResponse(writer, 400, "Bad Request", "{\"error\":\"missing key\"}");
+            return;
+        };
+        const value = parsed.value.object.get("value") orelse {
+            try writeResponse(writer, 400, "Bad Request", "{\"error\":\"missing value\"}");
+            return;
+        };
+        const key = try std.fmt.allocPrint(self.allocator, "/minions_kv/{s}", .{raw_key.string});
+        defer self.allocator.free(key);
+        ec.put(self.allocator, key, value.string) catch |err| {
+            const resp = try std.fmt.allocPrint(self.allocator, "{{\"error\":\"etcd error: {}\"}}", .{err});
+            defer self.allocator.free(resp);
+            try writeResponse(writer, 500, "Internal Server Error", resp);
+            return;
+        };
+        try writeResponse(writer, 200, "OK", "{\"status\":\"ok\"}");
+        return;
+    }
 
     if (!std.mem.eql(u8, target, "/status")) {
         try writeResponse(writer, 404, "Not Found", "{\"error\":\"not found\"}");

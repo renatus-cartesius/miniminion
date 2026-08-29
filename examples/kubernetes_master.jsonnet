@@ -12,9 +12,17 @@ local is_centos = has_dnf == 'yes';
 local pkg_type = if is_ubuntu then 'apt_pkg' else 'dnf_pkg';
 local swap_on = shellExec('swapon --show | wc -l');
 
-local already_init = shellExec('[ -f /etc/kubernetes/admin.conf ] && echo -n yes || true');
+local already_init = shellExec('[ -f /etc/kubernetes/admin.conf ] && [ -f /var/lib/kubelet/config.yaml ] && echo -n yes || true');
 local api_reachable = shellExec('curl -sk https://192.168.56.11:6443/healthz >/dev/null 2>/dev/null && echo -n yes || true');
+// Only check node readiness when API is reachable — avoids destructive reset on transient API outage.
+// If we can't verify, assume the node is ready (safe default: don't reset a possibly-healthy master).
+local node_ready =
+  if already_init != 'yes' then 'no'
+  else if api_reachable != 'yes' then 'yes'
+  else
+    shellExec("KUBECONFIG=/etc/kubernetes/admin.conf kubectl get node $(hostname -s) --no-headers 2>/dev/null | awk '{print $2}' | grep -qx Ready && echo -n yes || true");
 local my_ip = shellExec("ip -4 addr show | grep -oP '192\\.168\\.56\\.\\d+' | head -1");
+local hostname = shellExec('hostname -s');
 
 // ---------- Phase 1: System preconditions ----------
 (if swap_on != '0' then {
@@ -98,51 +106,93 @@ local k8s_rpm_repo_added = shellExec('[ -f /etc/yum.repos.d/kubernetes.repo ] &&
   cni_plugins: Resource(pkg_type, { name: 'kubernetes-cni' }, deps=['containerd_service'] + (if is_ubuntu && k8s_apt_repo_added != 'yes' then ['repo_update'] else if is_centos && k8s_rpm_repo_added != 'yes' then ['repo_update'] else [])),
 } +
 
-// ---------- Phase 6: Cluster init or join ----------
-(if already_init == 'yes' then {
+// ---------- Phase 6: Cluster identity management ----------
+// These always run on the initializing master (master-01) to seed KV data.
+// token_extract and hash_extract are duplicated in Phase 7 to refresh on re-apply.
+// node_ready ensures a master with stale admin.conf (but not in cluster) re-joins.
+(if already_init == 'yes' && node_ready == 'yes' then {
   setup_kubectl: Resource('shell', {
     command: 'mkdir -p $HOME/.kube && [ -f /etc/kubernetes/admin.conf ] && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
   }),
   cni_install: Resource('shell', {
     command: 'kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml 2>/dev/null; true',
   }, deps=['setup_kubectl']),
-} else if api_reachable != 'yes' then {
+} else if hostname == 'master-01' then {
   cluster_init: Resource('shell', {
     command: 'kubeadm init --apiserver-advertise-address=' + my_ip + ' --control-plane-endpoint=192.168.56.11:6443 --pod-network-cidr=10.244.0.0/16',
   }, deps=['kubeadm', 'containerd', 'cni_plugins']),
+
+  gen_cert_key: Resource('shell', {
+    command: 'openssl rand -hex 32',
+    output_name: 'cert_key',
+    kv_export: { key: 'k8s_cert_key' },
+  }),
+
   upload_certs: Resource('shell', {
-    command: 'kubeadm init phase upload-certs --upload-certs --certificate-key 6f796a21cbf5d612b98b7c87a2a00dd25bc9fc068d0b55197dfec134c5f77823 2>/dev/null; true',
-  }, deps=['cluster_init']),
+    command: 'kubeadm init phase upload-certs --upload-certs --certificate-key {{ ctx.gen_cert_key }} 2>/dev/null; true',
+    deps: ['cluster_init', 'gen_cert_key'],
+  }),
+
   setup_kubectl: Resource('shell', {
     command: 'mkdir -p $HOME/.kube && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
   }, deps=['cluster_init']),
-  patch_apiserver: Resource('shell', {
-    command: |||
-      grep -q "bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null || sed -i "/- --advertise-address/a\\    - --bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml
-      touch /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null; true
-    |||,
-  }, deps=['setup_kubectl']),
+
+  token_extract: Resource('shell', {
+    command: 'kubeadm token create --ttl 0 2>/dev/null',
+    output_name: 'k8s_token',
+    kv_export: { key: 'k8s_token' },
+    deps: ['setup_kubectl'],
+  }),
+
+  hash_extract: Resource('shell', {
+    command: 'openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed "s/^.* //"',
+    output_name: 'k8s_hash',
+    kv_export: { key: 'k8s_hash' },
+    deps: ['cluster_init'],
+  }),
+
   cni_install: Resource('shell', {
     command: 'kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml 2>/dev/null; true',
-  }, deps=['patch_apiserver']),
+  }, deps=['setup_kubectl']),
 } else {
+  reset_node: Resource('shell', {
+    command: 'kubeadm reset -f 2>/dev/null; rm -rf /etc/cni/net.d/* 2>/dev/null; true',
+  }, deps=['kubeadm', 'containerd', 'cni_plugins']),
+
   cluster_join: Resource('shell', {
     command: std.strReplace(|||
-      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i /root/.ssh/vagrant_ecdsa"
-      REMOTE="root@192.168.56.11"
-      TOKEN=$(timeout 10 ssh $SSH_OPTS $REMOTE "kubeadm token create --ttl 0" 2>/dev/null)
-      HASH=$(timeout 10 ssh $SSH_OPTS $REMOTE "openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'" 2>/dev/null)
-      CERT_KEY=$(timeout 10 ssh $SSH_OPTS $REMOTE "kubeadm init phase upload-certs --upload-certs --certificate-key 6f796a21cbf5d612b98b7c87a2a00dd25bc9fc068d0b55197dfec134c5f77823 2>/dev/null | tail -1" 2>/dev/null)
-      kubeadm join 192.168.56.11:6443 --token "$TOKEN" --discovery-token-ca-cert-hash "sha256:$HASH" --control-plane --certificate-key "$CERT_KEY" --apiserver-advertise-address={{my_ip}} --ignore-preflight-errors=all
+      kubeadm join 192.168.56.11:6443 --token {{ ctx.global.k8s_token }} --discovery-token-ca-cert-hash sha256:{{ ctx.global.k8s_hash }} --control-plane --certificate-key {{ ctx.global.k8s_cert_key }} --apiserver-advertise-address={{my_ip}} --ignore-preflight-errors=all
     |||, '{{my_ip}}', my_ip),
-  }, deps=['kubeadm', 'containerd', 'cni_plugins']),
+  }, deps=['reset_node', 'kubeadm', 'containerd', 'cni_plugins']),
   setup_kubectl: Resource('shell', {
     command: 'mkdir -p $HOME/.kube && [ -f /etc/kubernetes/admin.conf ] && cp /etc/kubernetes/admin.conf $HOME/.kube/config 2>/dev/null; true',
   }, deps=['cluster_join']),
-  patch_apiserver: Resource('shell', {
-    command: |||
-      grep -q "bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null || sed -i "/- --advertise-address/a\\    - --bind-address=0.0.0.0" /etc/kubernetes/manifests/kube-apiserver.yaml
-      touch /etc/kubernetes/manifests/kube-apiserver.yaml 2>/dev/null; true
-    |||,
-  }, deps=['setup_kubectl']),
-})
+}) +
+
+// ---------- Phase 7: KV refresh on re-apply (always runs when API is up) ----------
+// This ensures token/hash/cert_key are always in etcd even after controller restart or etcd reset.
+// cert_key refresh re-uploads cluster certs so re-joining masters can download them.
+(if hostname == 'master-01' && api_reachable == 'yes' then {
+  cert_key_refresh: Resource('shell', {
+    command: 'openssl rand -hex 32',
+    output_name: 'k8s_cert_key',
+    kv_export: { key: 'k8s_cert_key' },
+    deps: ['setup_kubectl'],
+  }),
+  upload_certs_refresh: Resource('shell', {
+    command: 'kubeadm init phase upload-certs --upload-certs --certificate-key {{ ctx.cert_key_refresh }} 2>/dev/null; true',
+    deps: ['cert_key_refresh'],
+  }),
+  token_refresh: Resource('shell', {
+    command: 'kubeadm token create --ttl 0 2>/dev/null',
+    output_name: 'k8s_token',
+    kv_export: { key: 'k8s_token' },
+    deps: ['setup_kubectl'],
+  }),
+  hash_refresh: Resource('shell', {
+    command: 'openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed "s/^.* //"',
+    output_name: 'k8s_hash',
+    kv_export: { key: 'k8s_hash' },
+    deps: ['setup_kubectl'],
+  }),
+} else {})

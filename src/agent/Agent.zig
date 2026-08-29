@@ -1,6 +1,7 @@
 const std = @import("std");
 const state_manager = @import("../state_manager.zig");
 const http = @import("../http.zig");
+const kv_backend = @import("../kv_backend.zig");
 
 const Self = @This();
 
@@ -13,7 +14,8 @@ pub fn create(init: std.process.Init, controller_url: []const u8) Self {
 
 pub fn run(self: *Self, manifest_path: []const u8) !void {
     var sm = state_manager{};
-    try sm.run(self.process_init, manifest_path);
+    const kv = kv_backend.create("", 0, self.process_init.io);
+    try sm.run(self.process_init, manifest_path, kv);
 }
 
 pub fn runFromController(self: *Self, host: []const u8, port: u16) !void {
@@ -24,6 +26,8 @@ pub fn runFromController(self: *Self, host: []const u8, port: u16) !void {
     defer allocator.free(hostname);
 
     std.debug.print("agent: connecting to controller {s}:{d} as {s}\n", .{ host, port, hostname });
+
+    const kv = kv_backend.create(host, port, io);
 
     const max_retries: usize = 100;
     var retry: usize = 0;
@@ -67,7 +71,7 @@ pub fn runFromController(self: *Self, host: []const u8, port: u16) !void {
 
         std.debug.print("agent: running state manifest\n", .{});
         var sm = state_manager{};
-        sm.run(self.process_init, tmp_path) catch |err| {
+        sm.run(self.process_init, tmp_path, kv) catch |err| {
             std.debug.print("agent: state failed: {}\n", .{err});
             const status_body = try std.fmt.allocPrint(allocator, "{{\"hostname\":\"{s}\",\"status\":\"failed\"}}", .{hostname});
             defer allocator.free(status_body);

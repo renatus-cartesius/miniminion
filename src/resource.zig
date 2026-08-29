@@ -16,7 +16,12 @@ const DnfUpdate = @import("resources/dnf_update.zig");
 const PacmanUpdate = @import("resources/pacman_update.zig");
 const ApkUpdate = @import("resources/apk_update.zig");
 
-pub const ResourceErrors = error{ MissingType, NotFoundResource, UnknownResourceType, IoNotInitialized, AllocatorNotInitialized, MissingField };
+pub const ResourceErrors = error{ MissingType, NotFoundResource, UnknownResourceType, IoNotInitialized, AllocatorNotInitialized, MissingField, MissingExportKey };
+
+pub const ExportConfig = struct {
+    key: []const u8,
+    value: ?[]const u8 = null,
+};
 
 pub const ResourceData = union(enum) {
     file: File,
@@ -49,12 +54,25 @@ pub const ResourceData = union(enum) {
             inline else => |*case| return try case.init(io, allocator),
         }
     }
+
+    pub fn captureOutput(self: *ResourceData) ?[]const u8 {
+        switch (self.*) {
+            inline else => |*case| {
+                if (@hasDecl(@TypeOf(case.*), "getOutput")) {
+                    return case.getOutput();
+                }
+                return null;
+            },
+        }
+    }
 };
 
 pub const Resource = struct {
     name: []const u8,
     data: ResourceData,
     deps: []const []const u8 = &.{},
+    output_name: []const u8 = "",
+    kv_export: ?ExportConfig = null,
 };
 
 pub const State = struct {
@@ -62,7 +80,7 @@ pub const State = struct {
     rmap: std.StringHashMap(usize),
 };
 
-fn parseResource(allocator: std.mem.Allocator, resource_name: []const u8, resource_data: std.json.Value, deps: []const []const u8) !Resource {
+fn parseResource(allocator: std.mem.Allocator, resource_name: []const u8, resource_data: std.json.Value, deps: []const []const u8, output_name: []const u8, export_config: ?ExportConfig) !Resource {
     const type_field = resource_data.object.get("type") orelse return error.MissingType;
     const type_name = type_field.string;
 
@@ -82,6 +100,8 @@ fn parseResource(allocator: std.mem.Allocator, resource_name: []const u8, resour
                 .name = resource_name,
                 .data = @unionInit(ResourceData, entry.name, try entry.Type.parseJson(allocator, resource_data)),
                 .deps = deps,
+                .output_name = output_name,
+                .kv_export = export_config,
             };
         }
     }
@@ -116,7 +136,19 @@ pub fn parseReources(arena: *std.heap.ArenaAllocator, json: []const u8) ![]Resou
         }
         const deps = try deps_array.toOwnedSlice(allocator);
 
-        try resources.append(allocator, try parseResource(allocator, resource_name, resource_data, deps));
+        const output_name = if (resource_data.object.get("output_name")) |v| v.string else "";
+
+        const export_config = if (resource_data.object.get("kv_export")) |v| blk: {
+            if (v != .object) break :blk null;
+            const export_key = v.object.get("key") orelse return error.MissingExportKey;
+            const export_value = if (v.object.get("value")) |ev| ev.string else null;
+            break :blk ExportConfig{
+                .key = export_key.string,
+                .value = if (export_value) |ev| ev else null,
+            };
+        } else null;
+
+        try resources.append(allocator, try parseResource(allocator, resource_name, resource_data, deps, output_name, export_config));
     }
 
     return resources.toOwnedSlice(allocator);

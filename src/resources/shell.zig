@@ -7,6 +7,7 @@ pub const tag = "shell";
 command: []const u8 = "",
 io: ?std.Io = null,
 allocator: ?std.mem.Allocator = null,
+stdout: []const u8 = "",
 
 pub fn create(command: []const u8) Self {
     return Self{ .command = command };
@@ -29,12 +30,14 @@ pub fn apply(self: *Self) !bool {
 
     const argv = [_][]const u8{ "sh", "-c", self.command };
     const result = try cmd.run(allocator, io, &argv);
-    defer {
+    errdefer {
         allocator.free(result.stderr);
         allocator.free(result.stdout);
     }
 
     if (result.term == .exited and result.term.exited == 0) {
+        self.stdout = try allocator.dupe(u8, std.mem.trimEnd(u8, result.stdout, "\n\r"));
+        allocator.free(result.stderr);
         return true;
     }
 
@@ -46,5 +49,12 @@ pub fn apply(self: *Self) !bool {
         }
         std.debug.print("  exit code: {}\n", .{exit_code});
     }
+    allocator.free(result.stdout);
+    allocator.free(result.stderr);
     return error.ShellCommandFailed;
+}
+
+pub fn getOutput(self: *Self) ?[]const u8 {
+    if (self.stdout.len > 0) return self.stdout;
+    return null;
 }
