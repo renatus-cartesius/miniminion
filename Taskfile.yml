@@ -1,26 +1,40 @@
 version: '3'
 
+output: prefixed
+
 vars:
-  INSTANCES_YAML:
-    sh: cat testing/instances.yaml
-  INSTANCES:
-    ref: fromYaml .INSTANCES_YAML
-  INSTANCES_NAMES_JSON:
-    sh: yq -o=json '.instances | keys' testing/instances.yaml
-  INSTANCES_NAMES:
-    ref: fromYaml .INSTANCES_NAMES_JSON
+  ENV:
+    sh: echo "${ENV:-k8s}"
+
   SSHIPTS: '-i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 
+  ENV_FILE: 'testing/{{.ENV}}/instances.yaml'
+
+  INSTANCES_YAML:
+    sh: cat "{{.ENV_FILE}}"
+
+  INSTANCES:
+    ref: fromYaml .INSTANCES_YAML
+
+  INSTANCES_NAMES_JSON:
+    sh: echo '{{.INSTANCES.instances | keys | toJson}}'
+
+  INSTANCES_NAMES:
+    ref: fromJson .INSTANCES_NAMES_JSON
+
 tasks:
+
+  # ── Build tasks ──────────────────────────────────────────────────
+
   build-builder:
-    desc: Build the Docker image
+    desc: Build the Docker builder image
     sources:
       - Dockerfile
     cmds:
       - docker build --build-arg UID=$(id -u) --build-arg GID=$(id -g) -t miniminion-builder .
 
   build:
-    desc: Build the miniminion project
+    desc: Build miniminion project binaries
     cmds:
       - docker run --rm -v .:/workspace -w /workspace miniminion-builder zig build -Doptimize=Debug --summary all
     sources:
@@ -47,119 +61,243 @@ tasks:
     deps:
       - build
 
+  # ── Environment management ──────────────────────────────────────
+
+  env:list:
+    desc: List available environment profiles
+    cmds:
+      - cmd: |
+          echo "Available environments:"
+          echo ""
+          for d in testing/*/instances.yaml; do
+            env_name=$(basename "$(dirname "$d")")
+            desc=$(yq '.description // ""' "$d" 2>/dev/null | head -c 100)
+            printf "  \033[1m%-15s\033[0m %s\n" "$env_name" "$desc"
+          done
+          echo ""
+          echo "Current: \033[1;32m{{.ENV}}\033[0m"
+
+  env:show:
+    desc: Show current environment details
+    cmds:
+      - cmd: |
+          echo "Environment: \033[1;32m{{.ENV}}\033[0m"
+          echo "Description:"
+          yq '.description // "n/a"' "{{.ENV_FILE}}"
+          echo ""
+          echo "Instances:"
+          {{range $name := .INSTANCES_NAMES}}
+          IP={{index $.INSTANCES.instances $name "ip"}}
+          BOX={{index $.INSTANCES.instances $name "box"}}
+          MEM={{index $.INSTANCES.instances $name "memory"}}
+          CPU={{index $.INSTANCES.instances $name "cpus"}}
+          printf "  \033[1m%-18s\033[0m IP=%-15s box=%-22s mem=%s cpus=%s\n" "{{$name}}" "$IP" "$BOX" "$MEM" "$CPU"
+          {{end}}
+          echo ""
+          echo "Config file: {{.ENV_FILE}}"
+
+  # ── Vagrant lifecycle (env-embedded wildcard) ───────────────────
+  #
+  # Usage:
+  #   task v-up:all                # current $ENV, all VMs
+  #   task v-up:redis:all          # redis env, all VMs
+  #   task v-up:redis:sentinel-01  # redis env, single VM
+  #   task v-deploy:postgres:pg-primary
+  #   task v-cmd:redis:all -- hostnamectl
+  #   task v-cluster:redis         # full bootstrap
+  #
+  # If the first wildcard segment matches an env dir name, it's used
+  # as the environment; otherwise the current $ENV is used.
+
   v-status:
-    desc: 'Get status for vagrant instances'
-    dir: './testing'
-    cmd: 'vagrant status'
+    desc: 'Show vagrant status (current env: {{.ENV}})'
+    dir: ./testing
+    cmd: vagrant status
 
   v-up:*:
     vars:
-      T: "{{ index .MATCH 0 }}"
-      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
-    desc: 'Up {{index .MATCH 0}} vagrant vm'
-    dir: './testing'
-    cmd: |
-      {{range $index, $element := .TARGETS | fromJson}}
-      vagrant up {{ $element }} --provision &
-      {{end}}
-      wait
+      RAW: "{{ index .MATCH 0 }}"
+      V_ENV: '{{if contains ":" .RAW}}{{first (splitList ":" .RAW)}}{{end}}'
+      V_TARGET: '{{if contains ":" .RAW}}{{rest (splitList ":" .RAW) | join ":"}}{{else}}{{.RAW}}{{end}}'
+    desc: 'Up VM(s) (task v-up:all, v-up:redis:all, v-up:redis:sentinel-01)'
+    dir: ./testing
+    cmds:
+      - cmd: |
+          env_name="{{.V_ENV}}"; [ -z "$env_name" ] && env_name="${ENV:-k8s}"
+          target="{{.V_TARGET}}"
+          if [ "$target" = "all" ]; then
+            for name in $(ENV=$env_name yq -r '.instances | keys | .[]' "testing/$env_name/instances.yaml"); do
+              vagrant up "$name" --provision &
+            done
+            wait
+          else
+            vagrant up "$target" --provision
+          fi
 
   v-destroy:*:
     vars:
-      T: "{{ index .MATCH 0 }}"
-      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
-    desc: 'Destroy {{index .MATCH 0}} vagrant vm'
-    dir: './testing'
-    cmd: |
-      {{range $index, $element := .TARGETS | fromJson}}
-      vagrant destroy -f {{ $element }} &
-      {{end}}
-      wait
+      RAW: "{{ index .MATCH 0 }}"
+      V_ENV: '{{if contains ":" .RAW}}{{first (splitList ":" .RAW)}}{{end}}'
+      V_TARGET: '{{if contains ":" .RAW}}{{rest (splitList ":" .RAW) | join ":"}}{{else}}{{.RAW}}{{end}}'
+    desc: 'Destroy VM(s) (task v-destroy:all, v-destroy:redis:all)'
+    dir: ./testing
+    cmds:
+      - cmd: |
+          env_name="{{.V_ENV}}"; [ -z "$env_name" ] && env_name="${ENV:-k8s}"
+          target="{{.V_TARGET}}"
+          if [ "$target" = "all" ]; then
+            for name in $(ENV=$env_name yq -r '.instances | keys | .[]' "testing/$env_name/instances.yaml"); do
+              vagrant destroy -f "$name" &
+            done
+            wait
+          else
+            vagrant destroy -f "$target"
+          fi
 
   v-login:*:
-    desc: 'Login into {{index .MATCH 0}} vagrant vm'
     vars:
-      VM_IP: '{{index .INSTANCES.instances (index .MATCH 0) "ip"}}'
-    cmd: 'ssh root@{{.VM_IP}} {{.SSHIPTS}}'
+      RAW: "{{ index .MATCH 0 }}"
+      V_ENV: '{{if contains ":" .RAW}}{{first (splitList ":" .RAW)}}{{end}}'
+      V_TARGET: '{{if contains ":" .RAW}}{{rest (splitList ":" .RAW) | join ":"}}{{else}}{{.RAW}}{{end}}'
+    desc: 'SSH into VM (task v-login:master-01, v-login:redis:sentinel-01)'
+    cmds:
+      - cmd: |
+          env_name="{{.V_ENV}}"; [ -z "$env_name" ] && env_name="${ENV:-k8s}"
+          target="{{.V_TARGET}}"
+          IP=$(ENV=$env_name yq -r ".instances[\"$target\"].ip" "testing/$env_name/instances.yaml")
+          echo "Connecting to $target ($IP)..."
+          ssh root@$IP {{$.SSHIPTS}}
+
+  v-ssh:*:
+    desc: 'Alias for v-login:*'
+    vars:
+      RAW: "{{ index .MATCH 0 }}"
+    cmds:
+      - task: v-login:{{.RAW}}
 
   v-deploy:*:
     vars:
-      T: "{{ index .MATCH 0 }}"
-      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
-    desc: 'Deploy to {{index .MATCH 0}} VM'
+      RAW: "{{ index .MATCH 0 }}"
+      V_ENV: '{{if contains ":" .RAW}}{{first (splitList ":" .RAW)}}{{end}}'
+      V_TARGET: '{{if contains ":" .RAW}}{{rest (splitList ":" .RAW) | join ":"}}{{else}}{{.RAW}}{{end}}'
+    desc: 'Deploy binaries to VM(s) (task v-deploy:all, v-deploy:redis:all)'
     cmds:
       - cmd: |
-          {{range $index, $element := .TARGETS | fromJson}}
-          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
-          {{range (index $.INSTANCES.instances $element "deploy")}}
-          {{.}} &
-          {{end}}
-          {{end}}
+          env_name="{{.V_ENV}}"; [ -z "$env_name" ] && env_name="${ENV:-k8s}"
+          target="{{.V_TARGET}}"
+          TMPFILE=$(mktemp)
+          ENV=$env_name yq '.instances' "testing/$env_name/instances.yaml" > "$TMPFILE"
+          if [ "$target" = "all" ]; then
+            names=$(yq -r 'keys | .[]' "$TMPFILE")
+          else
+            names="$target"
+          fi
+          for name in $names; do
+            IP=$(yq -r ".\"$name\".ip" "$TMPFILE")
+            echo "Deploying to $name ($IP)..."
+            yq -r ".\"$name\".deploy[]" "$TMPFILE" | while read -r cmd; do
+              eval "IP=$IP NAME=$name $cmd" &
+            done
+          done
           wait
+          rm -f "$TMPFILE"
     failfast: true
-    deps:
-      - build
-
-  v-cluster:
-    desc: 'Bootstrap the full K8s cluster (masters then workers)'
-    cmds:
-      - task: v-redeploy:controller-01
-      - task: v-redeploy:master-01
-      - task: v-redeploy:master-02
-      - task: v-redeploy:master-03
-      - task: v-redeploy:worker-01
-      - task: v-redeploy:worker-02
-      - task: v-redeploy:worker-03
     deps:
       - build
 
   v-bootstrap:*:
     vars:
-      T: "{{ index .MATCH 0 }}"
-      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
-    desc: 'Bootstrap {{index .MATCH 0}} VM (setup dependencies)'
+      RAW: "{{ index .MATCH 0 }}"
+      V_ENV: '{{if contains ":" .RAW}}{{first (splitList ":" .RAW)}}{{end}}'
+      V_TARGET: '{{if contains ":" .RAW}}{{rest (splitList ":" .RAW) | join ":"}}{{else}}{{.RAW}}{{end}}'
+    desc: 'Bootstrap dependencies on VM(s) (task v-bootstrap:all, v-bootstrap:redis:all)'
     cmds:
       - cmd: |
-          {{range $index, $element := .TARGETS | fromJson}}
-          {{$bootstrap := index $.INSTANCES.instances $element "bootstrap"}}
-          {{if $bootstrap}}
-          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
-          echo "Bootstrapping $NAME..."
-          ssh root@$IP {{$.SSHIPTS}} 'bash -s' <<'BOOTSTRAP_SCRIPT' &
-          {{range $bootstrap}}
-          {{.}}
-          {{end}}
-          BOOTSTRAP_SCRIPT
-          {{end}}
-          {{end}}
+          env_name="{{.V_ENV}}"; [ -z "$env_name" ] && env_name="${ENV:-k8s}"
+          target="{{.V_TARGET}}"
+          TMPFILE=$(mktemp)
+          ENV=$env_name yq '.instances' "testing/$env_name/instances.yaml" > "$TMPFILE"
+          if [ "$target" = "all" ]; then
+            names=$(yq -r 'keys | .[]' "$TMPFILE")
+          else
+            names="$target"
+          fi
+          for name in $names; do
+            bootstrap_cmds=$(yq -r ".\"$name\".bootstrap // [] | .[]" "$TMPFILE")
+            if [ -n "$bootstrap_cmds" ]; then
+              IP=$(yq -r ".\"$name\".ip" "$TMPFILE")
+              echo "Bootstrapping $name ($IP)..."
+              ssh root@$IP {{$.SSHIPTS}} 'bash -s' <<'BOOTSTRAP_SCRIPT' &
+              echo "$bootstrap_cmds"
+              BOOTSTRAP_SCRIPT
+            fi
+          done
           wait
+          rm -f "$TMPFILE"
+
+  v-run:*:
+    vars:
+      RAW: "{{ index .MATCH 0 }}"
+      V_ENV: '{{if contains ":" .RAW}}{{first (splitList ":" .RAW)}}{{end}}'
+      V_TARGET: '{{if contains ":" .RAW}}{{rest (splitList ":" .RAW) | join ":"}}{{else}}{{.RAW}}{{end}}'
+    desc: 'Run service on VM(s) (task v-run:all, v-run:redis:all)'
+    cmds:
+      - cmd: |
+          env_name="{{.V_ENV}}"; [ -z "$env_name" ] && env_name="${ENV:-k8s}"
+          target="{{.V_TARGET}}"
+          TMPFILE=$(mktemp)
+          ENV=$env_name yq '.instances' "testing/$env_name/instances.yaml" > "$TMPFILE"
+          if [ "$target" = "all" ]; then
+            names=$(yq -r 'keys | .[]' "$TMPFILE")
+          else
+            names="$target"
+          fi
+          for name in $names; do
+            IP=$(yq -r ".\"$name\".ip" "$TMPFILE")
+            RUN_CMD=$(yq -r ".\"$name\".run // \"\"" "$TMPFILE")
+            if [ -n "$RUN_CMD" ]; then
+              echo "Starting agent on $name ($IP)..."
+              ssh root@$IP {{$.SSHIPTS}} "systemctl stop minim-agent 2>/dev/null; systemctl reset-failed minim-agent 2>/dev/null; systemd-run --unit=minim-agent --description='minim-agent service' --same-dir --collect --property=Type=simple --property=Restart=on-failure sh -c '$RUN_CMD'"
+            fi
+          done
+          rm -f "$TMPFILE"
 
   v-redeploy:*:
     vars:
-      T: "{{ index .MATCH 0 }}"
-    desc: 'Recreate {{index .MATCH 0}} and deploy files'
-    dir: './testing'
+      RAW: "{{ index .MATCH 0 }}"
+    desc: 'Recreate, deploy, and run VM(s) (task v-redeploy:all, v-redeploy:redis:all, v-redeploy:redis:sentinel-01)'
     cmds:
-      - task: "v-destroy:{{ .T }}"
-      - task: "v-up:{{ .T }}"
-      - task: "v-bootstrap:{{ .T }}"
-      - task: "v-deploy:{{ .T }}"
-      - task: "v-run:{{ .T }}"
+      - task: v-destroy:{{.RAW}}
+      - task: v-up:{{.RAW}}
+      - task: v-bootstrap:{{.RAW}}
+      - task: v-deploy:{{.RAW}}
+      - task: v-run:{{.RAW}}
     deps:
       - build
 
   v-cmd:*:
     vars:
-      T: "{{ index .MATCH 0 }}"
-      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}{{.T | splitList "," | toJson}}{{end}}'
-    desc: 'Run arbitrary command on VMs (e.g. task v-cmd:all -- hostnamectl)'
+      RAW: "{{ index .MATCH 0 }}"
+      V_ENV: '{{if contains ":" .RAW}}{{first (splitList ":" .RAW)}}{{end}}'
+      V_TARGET: '{{if contains ":" .RAW}}{{rest (splitList ":" .RAW) | join ":"}}{{else}}{{.RAW}}{{end}}'
+    desc: 'Run command on VM(s) (task v-cmd:all -- hostnamectl, v-cmd:redis:all -- uptime)'
     cmds:
       - cmd: |
+          env_name="{{.V_ENV}}"; [ -z "$env_name" ] && env_name="${ENV:-k8s}"
+          target="{{.V_TARGET}}"
+          user_cmd="{{$.CLI_ARGS}}"
+          TMPFILE=$(mktemp)
+          ENV=$env_name yq '.instances' "testing/$env_name/instances.yaml" > "$TMPFILE"
+          if [ "$target" = "all" ]; then
+            names=$(yq -r 'keys | .[]' "$TMPFILE")
+          else
+            names="$target"
+          fi
           TMPDIR=$(mktemp -d)
-          {{range $index, $element := .TARGETS | fromJson}}
-          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
-          ( ssh root@$IP {{$.SSHIPTS}} "{{$.CLI_ARGS}}" >"$TMPDIR/$NAME.out" 2>"$TMPDIR/$NAME.err" ) &
-          {{end}}
+          for name in $names; do
+            IP=$(yq -r ".\"$name\".ip" "$TMPFILE")
+            ( ssh root@$IP {{$.SSHIPTS}} "$user_cmd" >"$TMPDIR/$name.out" 2>"$TMPDIR/$name.err" ) &
+          done
           wait
           for f in "$TMPDIR"/*.out; do
             name=$(basename "$f" .out)
@@ -171,19 +309,29 @@ tasks:
             fi
             echo
           done
-          rm -rf "$TMPDIR"
+          rm -rf "$TMPDIR" "$TMPFILE"
         silent: true
 
-  v-run:*:
-    vars:
-      T: "{{ index .MATCH 0 }}"
-      TARGETS: '{{if eq .T "all"}}{{.INSTANCES_NAMES | toJson}}{{else}}["{{.T}}"]{{end}}'
-    desc: 'Run on {{index .MATCH 0}} VM'
+  # ── Environment orchestration ──────────────────────────────────
+
+  v-cluster:
+    desc: 'Bootstrap the full current environment (use ENV=redis task v-cluster)'
+    deps:
+      - build
     cmds:
       - cmd: |
-          {{range $index, $element := .TARGETS | fromJson}}
-          IP={{index $.INSTANCES.instances $element "ip"}} NAME={{$element}}
-          CMD="systemctl stop minim-agent 2>/dev/null; systemctl reset-failed minim-agent 2>/dev/null; systemd-run --unit=minim-agent --description='minim-agent service' --same-dir --collect --property=Type=simple --property=Restart=on-failure sh -c '{{index $.INSTANCES.instances $element "run"}}'"
-          ssh root@$IP {{$.SSHIPTS}} "$CMD" &
-          {{end}}
-          wait
+          for vm in $(ENV={{.ENV}} yq -r '.instances | keys | .[]' testing/{{.ENV}}/instances.yaml); do
+            echo "=== Redeploying $vm ==="
+            task v-redeploy:"$vm" || exit 1
+          done
+          echo ""
+          echo "=== Environment '{{.ENV}}' deployed successfully ==="
+
+  v-cluster:*:
+    vars:
+      V_ENV: "{{ index .MATCH 0 }}"
+    desc: 'Bootstrap a specific environment (e.g. task v-cluster:redis)'
+    cmds:
+      - cmd: ENV={{.V_ENV}} task v-cluster
+    deps:
+      - build

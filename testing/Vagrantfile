@@ -1,6 +1,13 @@
 require 'yaml'
 
-instances = YAML.load_file(File.join(__dir__, 'instances.yaml'))['instances']
+env = ENV['ENV'] || 'k8s'
+instances_yaml = File.join(__dir__, env, 'instances.yaml')
+
+unless File.exist?(instances_yaml)
+  raise "Environment '#{env}' not found: missing #{instances_yaml}"
+end
+
+instances = YAML.load_file(instances_yaml)['instances']
 
 Vagrant.configure("2") do |config|
   config.ssh.insert_key = false

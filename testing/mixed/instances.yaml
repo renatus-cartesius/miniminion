@@ -1,0 +1,30 @@
+description: 'Multi-distribution test: Ubuntu apt, Alpine apk, Fedora dnf — standalone mode'
+
+x-agent: &agent
+  - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./zig-out/bin/minim-agent root@$IP:/root/'
+  - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./testing/mixed/states/ root@$IP:/root/states/'
+
+instances:
+  ubuntu-host:
+    box: bento/ubuntu-24.04
+    ip: 192.168.56.61
+    memory: "1024"
+    cpus: 1
+    deploy: *agent
+    run: '/root/minim-agent --standalone /root/states/ubuntu_host.jsonnet'
+
+  alpine-host:
+    box: bento/alpine-3.20
+    ip: 192.168.56.62
+    memory: "512"
+    cpus: 1
+    deploy: *agent
+    run: '/root/minim-agent --standalone /root/states/alpine_host.jsonnet'
+
+  fedora-host:
+    box: bento/fedora-41
+    ip: 192.168.56.63
+    memory: "1024"
+    cpus: 1
+    deploy: *agent
+    run: '/root/minim-agent --standalone /root/states/fedora_host.jsonnet'

@@ -1,0 +1,42 @@
+description: PostgreSQL primary-replica with streaming replication
+
+x-controller: &controller
+  - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./zig-out/bin/minim-controller root@$IP:/root/'
+  - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./testing/postgres/stack.jsonnet root@$IP:/root/stack.jsonnet'
+  - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./testing/postgres/states/ root@$IP:/root/states/'
+
+x-agent-ssh: &agent-ssh
+  - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./zig-out/bin/minim-agent root@$IP:/root/'
+  - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ./testing/postgres/states/ root@$IP:/root/states/'
+  - 'rsync -avz -e "ssh -i ~/.ssh/vagrant_ecdsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" ~/.ssh/vagrant_ecdsa root@$IP:/root/.ssh/'
+
+x-bootstrap: &bootstrap
+  - 'curl -fsSL https://github.com/etcd-io/etcd/releases/download/v3.5.17/etcd-v3.5.17-linux-amd64.tar.gz | tar xz -C /usr/local/bin --strip-components=1 --wildcards "*/etcd" "*/etcdctl"'
+  - 'mkdir -p /var/lib/etcd'
+  - 'systemctl is-active etcd.service >/dev/null 2>&1 || systemd-run --unit=etcd --description="etcd key-value store" --same-dir --collect --property=Type=simple --property=Restart=on-failure etcd --name etcd0 --data-dir /var/lib/etcd --advertise-client-urls http://0.0.0.0:2379 --listen-client-urls http://0.0.0.0:2379 --initial-advertise-peer-urls http://0.0.0.0:2380 --listen-peer-urls http://0.0.0.0:2380 --initial-cluster etcd0=http://0.0.0.0:2380 --initial-cluster-token tkn --initial-cluster-state new'
+
+instances:
+  controller-01:
+    box: bento/ubuntu-24.04
+    ip: 192.168.56.10
+    memory: "2048"
+    cpus: 2
+    bootstrap: *bootstrap
+    deploy: *controller
+    run: 'sleep 2 && /root/minim-controller /root/stack.jsonnet 8080 127.0.0.1 2379'
+
+  pg-primary:
+    box: bento/ubuntu-24.04
+    ip: 192.168.56.41
+    memory: "2048"
+    cpus: 2
+    deploy: *agent-ssh
+    run: '/root/minim-agent --controller 192.168.56.10:8080'
+
+  pg-replica:
+    box: bento/ubuntu-24.04
+    ip: 192.168.56.42
+    memory: "2048"
+    cpus: 2
+    deploy: *agent-ssh
+    run: '/root/minim-agent --controller 192.168.56.10:8080'
